@@ -84,3 +84,4 @@ flutter_icons:
   android: true
   ios: true
   image_path: "assets/images/pp.png" # Logonun tam yolu # Android adaptive icon için
+  remove_alpha_ios: true
