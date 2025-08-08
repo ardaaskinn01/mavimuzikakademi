@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1004299414872",
+    "project_id": "mavimuzikakademi-51e03",
+    "storage_bucket": "mavimuzikakademi-51e03.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1004299414872:android:feb79df93e8c2be228c92d",
+        "android_client_info": {
+          "package_name": "com.aasoft.mavimuzikakademi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCydPJu8s2KHww1Hph7JJ9Pc073Otgg0lg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
