@@ -2,14 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-// Diğer importlarınız burada kalacak
-import 'supervisor/day_column.dart'; // Bu import muhtemelen DayRow olmalı, kontrol ediniz.
+import 'supervisor/day_column.dart';
 import 'supervisor/add_event_dialog.dart';
-import 'supervisor/event_model.dart';
 import 'supervisor/event_service.dart';
 
-// DayRow widget'ının import'u (Eğer ayrı bir dosyadaysa)
-// import 'day_row.dart'; // Bu satırı DayRow'un bulunduğu dosyaya göre güncelleyin.
 
 class DersProgramiScreen extends StatefulWidget {
   const DersProgramiScreen({super.key});
@@ -78,6 +74,26 @@ class _DersProgramiScreenState extends State<DersProgramiScreen> {
       });
     } catch (e) {
       print('Silme hatası: $e');
+    }
+  }
+
+  void cancelSingleLesson(String eventId, DateTime dateToCancel) async {
+    try {
+      final lessonRef = FirebaseFirestore.instance.collection('lessons').doc(eventId);
+
+      // Belirtilen tarihi 'cancelledDates' dizisine ekle
+      await lessonRef.update({
+        'cancelledDates': FieldValue.arrayUnion([Timestamp.fromDate(dateToCancel)])
+      });
+
+      // Tüm event'leri yeniden yükle
+      await _loadEventsFromFirebase();
+
+    } catch (e) {
+      print('İptal hatası: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Ders iptal edilirken hata oluştu: $e')),
+      );
     }
   }
 
@@ -246,26 +262,66 @@ class _DersProgramiScreenState extends State<DersProgramiScreen> {
   }
 
   List<Map<String, dynamic>> getEventsForDay(DateTime day) {
-    final weekday = day.weekday;
-    final dayEvents = events[weekday] ?? [];
+    // 1. O gün için potansiyel dersleri al (Örn: Salı gününe ait tüm dersler)
+    final potentialEvents = events[day.weekday] ?? [];
 
-    return dayEvents.where((event) {
-      final DateTime eventDate = (event['date'] as Timestamp).toDate();
+    // 2. O günde gerçekten gösterilecek dersler için boş bir liste oluştur
+    final List<Map<String, dynamic>> actualEvents = [];
+
+    // 3. Potansiyel her dersi tek tek kontrol et
+    for (final event in potentialEvents) {
       final bool isRecurring = event['recurring'] == true;
+      final DateTime startDate = (event['date'] as Timestamp).toDate();
 
       if (isRecurring) {
-        // Sadece haftanın günü eşleşiyor mu kontrolü yeterli
-        return eventDate.weekday == weekday;
+        // --- TEKRARLANAN DERSLER İÇİN YENİ MANTIK ---
+
+        // a) Dersin başlama tarihi, baktığımız günden sonra ise gösterme
+        if (startDate.isAfter(day)) {
+          continue; // Bu dersi atla, çünkü daha başlamamış
+        }
+
+        // b) İPTAL KONTROLÜ: Dersin bu hafta için iptal edilip edilmediğini kontrol et
+        final List<dynamic> cancelledTimestamps = event['cancelledDates'] ?? [];
+        final bool isCancelledForThisDay = cancelledTimestamps.any((timestamp) {
+          final cancelledDate = (timestamp as Timestamp).toDate();
+          return cancelledDate.year == day.year &&
+              cancelledDate.month == day.month &&
+              cancelledDate.day == day.day;
+        });
+
+        // c) Eğer ders iptal edilmişse, listeye ekleme ve döngüde bir sonrakine geç
+        if (isCancelledForThisDay) {
+          continue; // Bu dersi atla
+        }
+
+        // d) Tüm kontrollerden geçtiyse, dersi o gün için listeye ekle.
+        //    ÖNEMLİ: Orijinal dersin bir kopyasını oluşturup tarihini güncelliyoruz.
+        //    Böylece dialog, hangi haftayı iptal edeceğini bilir.
+        final eventInstance = Map<String, dynamic>.from(event);
+        eventInstance['date'] = Timestamp.fromDate(day);
+        actualEvents.add(eventInstance);
+
       } else {
-        // Tek seferlik derste tarih tam eşleşmeli
-        return eventDate.year == day.year &&
-            eventDate.month == day.month &&
-            eventDate.day == day.day;
+        // --- TEK SEFERLİK DERSLER (Bu mantık zaten doğruydu) ---
+        if (startDate.year == day.year &&
+            startDate.month == day.month &&
+            startDate.day == day.day) {
+          actualEvents.add(event);
+        }
       }
-    }).toList();
+    }
+
+    // 4. Sadece o gün gösterilmesi gereken dersleri içeren son listeyi döndür
+    return actualEvents;
   }
 
-  void _showEventDetailsDialog(Map<String, dynamic> event) {
+  void _showEventDetailsDialog(
+      BuildContext context,
+      Map<String, dynamic> event, {
+        required Function(String eventId, DateTime dateToCancel) onSingleCancel,
+        required Function(String eventId) onPermanentDelete,
+      }) {
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -279,18 +335,12 @@ class _DersProgramiScreenState extends State<DersProgramiScreen> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 20,
-                spreadRadius: 5,
-              ),
-            ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // ... (Ders detaylarının gösterildiği üst kısım aynı kalabilir)
               Row(
                 children: [
                   Container(
@@ -299,11 +349,7 @@ class _DersProgramiScreenState extends State<DersProgramiScreen> {
                       color: Colors.blue.shade50,
                       shape: BoxShape.circle,
                     ),
-                    child: Icon(
-                      Icons.calendar_today,
-                      color: Colors.blue.shade700,
-                      size: 24,
-                    ),
+                    child: Icon(Icons.event, color: Colors.blue.shade700, size: 24),
                   ),
                   const SizedBox(width: 16),
                   Text(
@@ -317,7 +363,6 @@ class _DersProgramiScreenState extends State<DersProgramiScreen> {
                 ],
               ),
               const SizedBox(height: 24),
-
               _buildDetailRow(Icons.access_time, 'Saat', event['time'] ?? 'Bilinmiyor'),
               const SizedBox(height: 16),
               _buildDetailRow(Icons.person, 'Öğrenci', event['studentName'] ?? 'Yok'),
@@ -325,27 +370,72 @@ class _DersProgramiScreenState extends State<DersProgramiScreen> {
               _buildDetailRow(Icons.school, 'Eğitmen', event['teacherName'] ?? 'Yok'),
               const SizedBox(height: 16),
               _buildDetailRow(Icons.category, 'Branş', event['branch'] ?? 'Yok'),
-
+              if (event['isMakeup'] == true) ...[
+                const SizedBox(height: 16),
+                _buildDetailRow(Icons.autorenew, 'Ders Türü', 'Telafi Dersi'),
+              ],
               const SizedBox(height: 32),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  style: TextButton.styleFrom(
-                    backgroundColor: Colors.blue.shade50,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
+
+              // --- DEĞİŞEN BUTON BÖLÜMÜ ---
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  // 1. BU HAFTALIK SİL BUTONU
+                  TextButton(
+                    onPressed: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('Dersi İptal Et'),
+                          content: const Text('Bu ders sadece bu haftalık iptal edilecektir. Onaylıyor musunuz?'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Vazgeç')),
+                            ElevatedButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
+                              child: const Text('Evet, İptal Et'),
+                            ),
+                          ],
+                        ),
+                      );
+
+                      if (confirm == true) {
+                        // Olayın tarihini al ve tek seferlik iptal fonksiyonunu çağır
+                        DateTime eventDate = (event['date'] as Timestamp).toDate();
+                        onSingleCancel(event['id'], eventDate);
+                        Navigator.pop(context); // Detay dialog'unu kapat
+                      }
+                    },
+                    child: Text('Bu Haftalık Sil', style: TextStyle(color: Colors.orange.shade700, fontWeight: FontWeight.bold)),
                   ),
-                  child: Text(
-                    'Tamam',
-                    style: TextStyle(
-                      color: Colors.blue.shade700,
-                      fontWeight: FontWeight.bold,
-                    ),
+
+                  // 2. PROGRAMDAN SİL BUTONU
+                  TextButton(
+                    onPressed: () async {
+                      final confirm = await showDialog<bool>(
+                        context: context,
+                        builder: (context) => AlertDialog(
+                          title: const Text('Programdan Sil'),
+                          content: const Text('Bu ders tüm haftalardan kalıcı olarak silinecektir. Emin misiniz?'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Vazgeç')),
+                            ElevatedButton(
+                              onPressed: () => Navigator.pop(context, true),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                              child: const Text('Evet, Kalıcı Sil'),
+                            ),
+                          ],
+                        ),
+                      );
+
+                      if (confirm == true) {
+                        onPermanentDelete(event['id']);
+                        Navigator.pop(context); // Detay dialog'unu kapat
+                      }
+                    },
+                    child: Text('Programdan Sil', style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold)),
                   ),
-                ),
+                ],
               ),
             ],
           ),
@@ -448,8 +538,12 @@ class _DersProgramiScreenState extends State<DersProgramiScreen> {
                 return DayRow(
                   day: day,
                   dayEvents: eventsForDay,
-                  onDelete: deleteEvent,
-                  onEventTap: _showEventDetailsDialog,
+                  onEventTap: (event) => _showEventDetailsDialog(
+                    context,
+                    event,
+                    onSingleCancel: cancelSingleLesson,   // 'Bu Haftalık Sil' için bu fonksiyonu veriyoruz.
+                    onPermanentDelete: deleteEvent,     // 'Programdan Sil' için bu fonksiyonu veriyoruz.
+                  ),
                 );
               }).toList(),
             ),
@@ -465,11 +559,21 @@ class _DersProgramiScreenState extends State<DersProgramiScreen> {
   }
 }
 
-
 class AddMakeupEventDialog extends StatefulWidget {
   final Function(DateTime, Map<String, dynamic>) onSave;
+  final String? initialTeacherId;
+  final String? initialTeacherName;
+  final String? initialStudentId;
+  final String? initialStudentName;
 
-  const AddMakeupEventDialog({super.key, required this.onSave});
+  const AddMakeupEventDialog({
+    super.key,
+    required this.onSave,
+    this.initialTeacherId,
+    this.initialTeacherName,
+    this.initialStudentId,
+    this.initialStudentName,
+  });
 
   @override
   State<AddMakeupEventDialog> createState() => _AddMakeupEventDialogState();
@@ -482,6 +586,54 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
   String? selectedStudentId;
   String? selectedStudentName;
   List<Map<String, dynamic>> filteredStudents = [];
+
+  @override
+  void initState() {
+    super.initState();
+    selectedTeacherId = widget.initialTeacherId;
+    selectedStudentId = widget.initialStudentId;
+    selectedStudentName = widget.initialStudentName;
+
+    // If initial values are provided, we should load the filtered students
+    if (widget.initialTeacherId != null) {
+      _loadStudentsForTeacher(widget.initialTeacherId!);
+    }
+  }
+
+  Future<void> _loadStudentsForTeacher(String teacherId) async {
+    final firestore = FirebaseFirestore.instance;
+    final teacherDoc = await firestore.collection('users').doc(teacherId).get();
+    // Corrected: Retrieve 'branches' as a List<String>
+    final List<String> teacherBranches = List<String>.from(teacherDoc['branches'] ?? []);
+
+    final parentSnapshot = await firestore
+        .collection('users')
+        .where('role', isEqualTo: 'parent')
+        .get();
+
+    List<Map<String, dynamic>> matchingStudents = [];
+
+    for (var doc in parentSnapshot.docs) {
+      final parent = doc.data();
+      final parentId = doc.id;
+      final students = List<Map<String, dynamic>>.from(parent['students'] ?? []);
+
+      for (var student in students) {
+        final studentBranches = List<String>.from(student['branches'] ?? []);
+        // Corrected: Check for intersection of teacher and student branches
+        if (teacherBranches.any((branch) => studentBranches.contains(branch))) {
+          matchingStudents.add({
+            'parentId': parentId, // Changed 'id' to 'parentId' for consistency with AddEventDialog
+            'name': student['name'],
+          });
+        }
+      }
+    }
+
+    setState(() {
+      filteredStudents = matchingStudents;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -509,6 +661,7 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                 final now = DateTime.now();
                 final picked = await showDatePicker(
                   context: context,
+                  locale: const Locale('tr', 'TR'),
                   initialDate: selectedDate ?? now,
                   firstDate: now.subtract(const Duration(days: 365)),
                   lastDate: now.add(const Duration(days: 365)),
@@ -534,6 +687,7 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
 
                 return DropdownButtonFormField<String>(
                   decoration: const InputDecoration(labelText: 'Eğitmen Seç'),
+                  value: selectedTeacherId,
                   items: teachers.map((doc) {
                     return DropdownMenuItem(
                       value: doc.id,
@@ -541,36 +695,16 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                     );
                   }).toList(),
                   onChanged: (val) async {
-                    selectedTeacherId = val;
-                    final selectedDoc = teachers.firstWhere((t) => t.id == val);
-                    final branch = selectedDoc['branch'];
-
-                    final parentSnapshot = await firestore
-                        .collection('users')
-                        .where('role', isEqualTo: 'parent')
-                        .get();
-
-                    List<Map<String, dynamic>> matchingStudents = [];
-
-                    for (var doc in parentSnapshot.docs) {
-                      final parent = doc.data();
-                      final parentId = doc.id;
-                      final students = List<Map<String, dynamic>>.from(parent['students'] ?? []);
-
-                      for (var student in students) {
-                        final studentBranches = List<String>.from(student['branches'] ?? []);
-                        if (studentBranches.contains(branch)) {
-                          matchingStudents.add({
-                            'id': parentId,
-                            'name': student['name'],
-                          });
-                        }
-                      }
-                    }
-
                     setState(() {
-                      filteredStudents = matchingStudents;
+                      selectedTeacherId = val;
+                      // Clear previously filtered students when teacher changes
+                      filteredStudents = [];
+                      selectedStudentId = null;
+                      selectedStudentName = null;
                     });
+                    if (val != null) {
+                      await _loadStudentsForTeacher(val);
+                    }
                   },
                 );
               },
@@ -594,16 +728,23 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
             if (filteredStudents.isNotEmpty)
               DropdownButtonFormField<String>(
                 decoration: const InputDecoration(labelText: 'Öğrenci Seç'),
+                value: selectedStudentId != null && filteredStudents.any((s) => s['parentId'] == selectedStudentId && s['name'] == selectedStudentName)
+                    ? "${selectedStudentId}_$selectedStudentName"
+                    : null, // Set to null if current student isn't in filtered list
                 items: filteredStudents.map((student) {
+                  final uniqueValue = "${student['parentId']}_${student['name']}";
                   return DropdownMenuItem<String>(
-                    value: student['id'],
+                    value: uniqueValue,
                     child: Text(student['name']),
                   );
                 }).toList(),
                 onChanged: (val) {
                   setState(() {
-                    selectedStudentId = val;
-                    selectedStudentName = filteredStudents.firstWhere((s) => s['id'] == val)['name'];
+                    final selected = filteredStudents.firstWhere(
+                          (s) => "${s['parentId']}_${s['name']}" == val,
+                    );
+                    selectedStudentId = selected['parentId'];
+                    selectedStudentName = selected['name'];
                   });
                 },
               ),
@@ -622,7 +763,18 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                 selectedDate != null) {
               final teacherDoc = await firestore.collection('users').doc(selectedTeacherId).get();
               final teacherName = teacherDoc['name'];
-              final branch = teacherDoc['branch'];
+              // Corrected: Retrieve 'branches' and use the first branch if available
+              final List<dynamic> branches = teacherDoc['branches'] ?? [];
+              final branch = branches.isNotEmpty ? branches[0] : null;
+
+              if (branch == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Eğitmenin tanımlı bir branşı yok'),
+                  ),
+                );
+                return;
+              }
 
               final newDocRef = firestore.collection('lessons').doc();
               final event = {
@@ -634,8 +786,8 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                 'branch': branch,
                 'studentId': selectedStudentId,
                 'studentName': selectedStudentName,
-                'recurring': false,    // Telafi dersi olduğu için tekrar yok
-                'isMakeup': true,     // opsiyonel flag
+                'recurring': false,
+                'isMakeup': true,
               };
 
               await newDocRef.set(event);

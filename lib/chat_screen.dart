@@ -35,6 +35,8 @@ class _ChatScreenState extends State<ChatScreen> {
   final _iv = encrypt.IV.fromUtf8('1234567890123456');
   AudioRecorderService _audioService = AudioRecorderService();
   bool _isRecording = false;
+  final AudioPlayerService _audioPlayerService = AudioPlayerService();
+  String? _currentlyPlayingUrl;
 
   @override
   void initState() {
@@ -47,6 +49,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _focusNode.dispose();
+    _audioPlayerService.dispose();
     super.dispose();
   }
 
@@ -404,8 +407,25 @@ class _ChatScreenState extends State<ChatScreen> {
                                               mainAxisSize: MainAxisSize.min,
                                               children: [
                                                 IconButton(
-                                                  icon: Icon(Icons.play_arrow, color: isMe ? Colors.white : Colors.blue[700]),
-                                                  onPressed: () => launchCustomUrl(context, decryptedText),
+                                                  icon: Icon(
+                                                    _currentlyPlayingUrl == decryptedText
+                                                        ? Icons.stop
+                                                        : Icons.play_arrow,
+                                                    color: isMe ? Colors.white : Colors.blue[700],
+                                                  ),
+                                                  onPressed: () async {
+                                                    if (_currentlyPlayingUrl == decryptedText) {
+                                                      await _audioPlayerService.stop();
+                                                      setState(() {
+                                                        _currentlyPlayingUrl = null;
+                                                      });
+                                                    } else {
+                                                      await _audioPlayerService.play(decryptedText);
+                                                      setState(() {
+                                                        _currentlyPlayingUrl = decryptedText;
+                                                      });
+                                                    }
+                                                  },
                                                 ),
                                                 const SizedBox(width: 8),
                                                 Text(

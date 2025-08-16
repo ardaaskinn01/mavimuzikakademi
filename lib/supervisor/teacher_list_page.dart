@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:mavimuzikakademi/supervisor/reset_password_dialog.dart';
+import 'package:mavimuzikakademi/supervisor/teacher_stats_page.dart';
 import '../chat_screen.dart';
 
 class TeacherListPage extends StatefulWidget {
@@ -242,6 +243,18 @@ class _TeacherListPageState extends State<TeacherListPage> {
                                 ),
                               ],
                             ),
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.bar_chart, color: Colors.blue[700]),
+                            tooltip: "Ders İstatistikleri",
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => TeacherStatsPage(teacherId: doc.id),
+                                ),
+                              );
+                            },
                           ),
                           if (currentUserRole == 'supervisor')
                             IconButton(

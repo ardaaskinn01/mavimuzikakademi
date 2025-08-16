@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart'; // Veya AudioRecorder, paketin güncel adına göre
+import 'package:audioplayers/audioplayers.dart';
 
 class AudioRecorderService {
   // `Record()` yerine `AudioRecorder()` veya paketin güncel adı olabilir
@@ -62,5 +63,27 @@ class AudioRecorderService {
   // Kaynakları serbest bırakmak için bir dispose metodu eklemek iyi bir pratiktir.
   void dispose() {
     _audioRecorder.dispose();
+  }
+}
+
+class AudioPlayerService {
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isPlaying = false;
+
+  Future<void> play(String url) async {
+    if (_isPlaying) {
+      await _audioPlayer.stop();
+    }
+    await _audioPlayer.play(UrlSource(url));
+    _isPlaying = true;
+  }
+
+  Future<void> stop() async {
+    await _audioPlayer.stop();
+    _isPlaying = false;
+  }
+
+  void dispose() {
+    _audioPlayer.dispose();
   }
 }

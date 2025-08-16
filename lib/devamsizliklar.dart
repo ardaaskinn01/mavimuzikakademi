@@ -84,20 +84,6 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
           borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
         ),
         iconTheme: const IconThemeData(color: Colors.white),
-        actions: userRole == 'supervisor'
-            ? [
-          IconButton(
-            icon: const Icon(Icons.group, color: Colors.white),
-            tooltip: 'Öğrenciler',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (_) => const SupervisorStudentListScreen()),
-              );
-            },
-          )
-        ]
-            : null,
       ),
       body: userRole == null
           ? Center(child: CircularProgressIndicator())

@@ -75,8 +75,8 @@ class _AddEventDialogState extends State<AddEventDialog> {
                   onChanged: (val) async {
                     selectedTeacherId = val;
                     final selectedDoc = teachers.firstWhere((t) => t.id == val);
-                    final List<dynamic> branches = selectedDoc['branches'] ?? [];
-                    final branch = branches.isNotEmpty ? branches[0] : null;
+                    final List<String> teacherBranches =
+                    List<String>.from(selectedDoc['branches'] ?? []);
 
                     final parentSnapshot =
                         await firestore
@@ -97,10 +97,9 @@ class _AddEventDialogState extends State<AddEventDialog> {
                         final studentBranches = List<String>.from(
                           student['branches'] ?? [],
                         );
-                        if (studentBranches.contains(branch)) {
+                        if (teacherBranches.any((branch) => studentBranches.contains(branch))) {
                           matchingStudents.add({
-                            'id':
-                                parentId, // studentId yerine parentId kullanıyoruz çünkü DB'de öyle kaydediliyor
+                            'parentId': parentId,
                             'name': student['name'],
                           });
                         }
@@ -130,20 +129,20 @@ class _AddEventDialogState extends State<AddEventDialog> {
             if (filteredStudents.isNotEmpty)
               DropdownButtonFormField<String>(
                 decoration: const InputDecoration(labelText: 'Öğrenci Seç'),
-                items:
-                    filteredStudents.map((student) {
-                      return DropdownMenuItem<String>(
-                        value: student['id'],
-                        child: Text(student['name']),
-                      );
-                    }).toList(),
+                items: filteredStudents.map((student) {
+                  final uniqueValue = "${student['parentId']}_${student['name']}";
+                  return DropdownMenuItem<String>(
+                    value: uniqueValue,
+                    child: Text(student['name']),
+                  );
+                }).toList(),
                 onChanged: (val) {
                   setState(() {
-                    selectedStudentId = val;
-                    selectedStudentName =
-                        filteredStudents.firstWhere(
-                          (s) => s['id'] == val,
-                        )['name'];
+                    final selected = filteredStudents.firstWhere(
+                          (s) => "${s['parentId']}_${s['name']}" == val,
+                    );
+                    selectedStudentId = selected['parentId'];
+                    selectedStudentName = selected['name'];
                   });
                 },
               ),

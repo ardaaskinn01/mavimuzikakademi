@@ -1,6 +1,10 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+
+import '../dersprogrami.dart';
+import '../devamsizliklar.dart';
 
 class SupervisorStudentListScreen extends StatefulWidget {
   const SupervisorStudentListScreen({super.key});
@@ -10,7 +14,22 @@ class SupervisorStudentListScreen extends StatefulWidget {
 }
 
 class _SupervisorStudentListScreenState extends State<SupervisorStudentListScreen> {
+  final userId = FirebaseAuth.instance.currentUser!.uid;
   final Map<String, bool> expandedMap = {};
+  String? userRole;
+
+  Future<void> getUserRole() async {
+    final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+    setState(() {
+      userRole = doc['role']; // "teacher", "supervisor", vs.
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    getUserRole();
+  }
 
   Future<List<Map<String, dynamic>>> getStudentAbsences(String studentName) async {
     final lessonsQuery = await FirebaseFirestore.instance
@@ -59,6 +78,20 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
           ),
         ),
         iconTheme: const IconThemeData(color: Colors.white),
+        actions: userRole == 'supervisor'
+            ? [
+          IconButton(
+            icon: const Icon(Icons.group, color: Colors.white),
+            tooltip: 'Öğrenciler',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const DevamsizliklarScreen()),
+              );
+            },
+          )
+        ]
+            : null,
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
@@ -201,8 +234,7 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
                                       'dd MMMM yyyy', 'tr_TR')
                                       .format(entry['date']);
                                   return Container(
-                                    margin: const EdgeInsets.symmetric(
-                                        horizontal: 16, vertical: 8),
+                                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                                     child: ListTile(
                                       dense: true,
                                       leading: Container(
@@ -236,6 +268,47 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
                                           ),
                                         ],
                                       ),
+                                      trailing: entry['status'] != 'var'
+                                          ? ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.orange[50],
+                                          foregroundColor: Colors.orange[800],
+                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(8),
+                                          ),
+                                        ),
+                                        onPressed: () async {
+                                          // Get teacher info for this lesson
+                                          final lessonQuery = await FirebaseFirestore.instance
+                                              .collection('lessons')
+                                              .where('studentName', isEqualTo: studentName)
+                                              .where('branch', isEqualTo: entry['lessonBranch'])
+                                              .limit(1)
+                                              .get();
+
+                                          if (lessonQuery.docs.isNotEmpty) {
+                                            final lessonData = lessonQuery.docs.first.data();
+                                            final teacherId = lessonData['teacherId'];
+                                            final teacherName = lessonData['teacherName'];
+
+                                            showDialog(
+                                              context: context,
+                                              builder: (context) => AddMakeupEventDialog(
+                                                onSave: (date, event) {
+                                                  // Optional: You can add any post-save logic here
+                                                },
+                                                initialTeacherId: teacherId,
+                                                initialTeacherName: teacherName,
+                                                initialStudentId: student['parentId'], // parentId is used as studentId in your structure
+                                                initialStudentName: studentName,
+                                              ),
+                                            );
+                                          }
+                                        },
+                                        child: const Text('Telafi Oluştur'),
+                                      )
+                                          : null,
                                     ),
                                   );
                                 }).toList(),

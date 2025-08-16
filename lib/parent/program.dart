@@ -3,43 +3,79 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 
+class _LessonDisplayData {
+  final QueryDocumentSnapshot doc;
+  final DateTime nextDate;
+
+  _LessonDisplayData({required this.doc, required this.nextDate});
+}
+
 class ParentProgramScreen extends StatelessWidget {
   const ParentProgramScreen({Key? key}) : super(key: key);
 
-  Future<List<QueryDocumentSnapshot>> fetchLessonsForParent(String parentId) async {
-    // 1. Parent verisini al
-    final parentDoc = await FirebaseFirestore.instance.collection('users').doc(parentId).get();
-    final parentData = parentDoc.data();
+  DateTime _nextRecurringDate(DateTime startDate, DateTime fromDate) {
+    int startWeekday = startDate.weekday;
+    int fromWeekday = fromDate.weekday;
 
-    if (parentData == null || parentData['students'] == null) return [];
+    int daysDifference = (startWeekday - fromWeekday) % 7;
+    DateTime nextDate = fromDate.add(Duration(days: daysDifference));
 
-    final List<dynamic> studentList = parentData['students'];
-    final List<String> studentNames = studentList.map((e) => e['name'].toString().toLowerCase()).toList();
+    // Aynı gün ise ve zaman geçmişse 1 hafta sonraya al
+    if (_isSameDate(nextDate, fromDate) && fromDate.isAfter(startDate)) {
+      nextDate = nextDate.add(Duration(days: 7));
+    }
 
-    // 2. Lessons koleksiyonunu al
-    final lessonsSnapshot = await FirebaseFirestore.instance.collection('lessons').get();
+    // Saati ve dakikayı başlangıç tarihinden al
+    return DateTime(
+      nextDate.year,
+      nextDate.month,
+      nextDate.day,
+      startDate.hour,
+      startDate.minute,
+    );
+  }
 
-    // 3. Öğrencinin adına göre filtrele
+  bool _isSameDate(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  Future<List<_LessonDisplayData>> fetchLessonsForParent(String parentId) async {
+    final firestore = FirebaseFirestore.instance;
     final now = DateTime.now();
 
-    final filteredLessons = lessonsSnapshot.docs.where((lessonDoc) {
-      final data = lessonDoc.data();
-      final lessonStudentName = (data['studentName'] ?? '').toString().toLowerCase();
+    // Firestore'dan dersleri çek
+    final lessonsSnapshot = await firestore
+        .collection('lessons')
+        .where('studentId', isEqualTo: parentId)
+        .get();
+
+    List<_LessonDisplayData> lessonDisplayList = [];
+
+    for (var lessonDoc in lessonsSnapshot.docs) {
+      final data = lessonDoc.data() as Map<String, dynamic>;
+
       final Timestamp? timestamp = data['date'];
-      if (timestamp == null) return false;
+      if (timestamp == null) continue;
 
       final lessonDate = timestamp.toDate();
-      return studentNames.contains(lessonStudentName) && lessonDate.isAfter(now);
-    }).toList();
+      final bool recurring = data['recurring'] ?? false;
 
-    // Tarihe göre sırala (yakın olanlar en önce)
-    filteredLessons.sort((a, b) {
-      final dateA = (a['date'] as Timestamp).toDate();
-      final dateB = (b['date'] as Timestamp).toDate();
-      return dateA.compareTo(dateB);
-    });
+      DateTime nextLessonDate;
 
-    return filteredLessons;
+      if (recurring) {
+        nextLessonDate = _nextRecurringDate(lessonDate, now);
+      } else {
+        nextLessonDate = lessonDate;
+      }
+
+      if (nextLessonDate.isAfter(now) || _isSameDate(nextLessonDate, now)) {
+        lessonDisplayList.add(_LessonDisplayData(doc: lessonDoc, nextDate: nextLessonDate));
+      }
+    }
+
+    lessonDisplayList.sort((a, b) => a.nextDate.compareTo(b.nextDate));
+
+    return lessonDisplayList;
   }
 
   @override
@@ -63,7 +99,7 @@ class ParentProgramScreen extends StatelessWidget {
         ),
       ),
       backgroundColor: Colors.blue[50],
-      body: FutureBuilder<List<QueryDocumentSnapshot>>(
+      body: FutureBuilder<List<_LessonDisplayData>>(
         future: fetchLessonsForParent(currentUser.uid),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
@@ -92,10 +128,11 @@ class ParentProgramScreen extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(16, 20, 16, 20),
             itemCount: lessons.length,
             itemBuilder: (context, index) {
-              final lesson = lessons[index];
+              final lessonData = lessons[index];
+              final lesson = lessonData.doc;
               final data = lesson.data() as Map<String, dynamic>;
 
-              final date = (data['date'] as Timestamp).toDate();
+              final date = lessonData.nextDate;
               final formattedDate = DateFormat('dd MMMM yyyy, EEEE', 'tr_TR').format(date);
               final formattedTime = data['time'] ?? 'Saat bilgisi yok';
               final branch = data['branch'] ?? 'Ders Başlığı Yok';

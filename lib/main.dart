@@ -2,17 +2,21 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:flutter_localizations/flutter_localizations.dart'; // DOĞRU PAKET
 import 'firebase_options.dart';
 import 'login.dart';
-import 'login_loading_screen.dart'; // BU SATIRI EKLE
-import 'package:intl/date_symbol_data_local.dart';
+import 'login_loading_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+
   await initializeDateFormatting('tr_TR', null);
+
   await Supabase.initialize(
     url: "https://rprxugnzyglgmrsubekc.supabase.co",
     anonKey:
@@ -30,6 +34,15 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Flutter Demo',
       debugShowCheckedModeBanner: false,
+      locale: const Locale('tr', 'TR'), // Türkçe takvim
+      supportedLocales: const [
+        Locale('tr', 'TR'),
+      ],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
       ),
@@ -54,7 +67,6 @@ class _SplashScreenState extends State<SplashScreen> {
       final user = FirebaseAuth.instance.currentUser;
 
       if (user != null) {
-        // Kullanıcının oturumu açık → login yükleme ekranına git
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -62,7 +74,6 @@ class _SplashScreenState extends State<SplashScreen> {
           ),
         );
       } else {
-        // Oturum yok → login ekranına git
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
@@ -80,15 +91,12 @@ class _SplashScreenState extends State<SplashScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Logo
             Image(
               image: AssetImage('assets/images/pp.png'),
               width: 150,
               height: 150,
             ),
             SizedBox(height: 24),
-
-            // Yazı
             Text(
               "Uygulama Yükleniyor...",
               style: TextStyle(
