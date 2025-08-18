@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'custombar.dart';
+import 'login.dart';
 
 class SettingsScreen extends StatefulWidget {
   @override
@@ -38,7 +39,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _signOut() async {
     await FirebaseAuth.instance.signOut();
-    Navigator.of(context).pushReplacementNamed('/login');
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
   }
 
   Future<void> _deleteAccount() async {
@@ -47,7 +51,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       try {
         await FirebaseFirestore.instance.collection('users').doc(user.uid).delete();
         await user.delete();
-        Navigator.of(context).pushReplacementNamed('/login');
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+        );
       } on FirebaseAuthException catch (e) {
         if (e.code == 'requires-recent-login') {
           ScaffoldMessenger.of(context).showSnackBar(

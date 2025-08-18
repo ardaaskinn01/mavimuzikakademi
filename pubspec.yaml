@@ -55,6 +55,7 @@ dependencies:
   audioplayers: ^6.5.0
   flutter_sound: ^9.28.0
   just_audio: ^0.10.4
+  device_info_plus: ^11.5.0
 
 dev_dependencies:
   flutter_test:

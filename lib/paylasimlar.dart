@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -112,32 +113,26 @@ class _PaylasimlarScreenState extends State<PaylasimlarScreen> {
                       const SizedBox(height: 12),
                       ElevatedButton.icon(
                         onPressed: () async {
-                          final status = await Permission.storage.request();
-                          if (!status.isGranted) {
+                          final izinVar = await _isteDepoIzni();
+                          if (!izinVar) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                  content: Text("Medya seçmek için depolama izni gerekli.")),
+                              const SnackBar(content: Text("Medya seçmek için depolama izni gerekli.")),
                             );
                             return;
                           }
 
                           final result = await FilePicker.platform.pickFiles(
                             type: FileType.custom,
-                            allowedExtensions: ['jpg', 'jpeg', 'png', 'gif', 'mp4', 'mov', 'webm'],
+                            allowedExtensions: ['jpg','jpeg','png','gif','mp4','mov','webm'],
                             allowMultiple: true,
                           );
 
                           if (result != null) {
-                            setState(() {
-                              medyaList = result.paths
-                                  .whereType<String>()
-                                  .map((path) => File(path))
-                                  .toList();
-                            });
+                            medyaList = result.paths.whereType<String>().map((p) => File(p)).toList();
                           }
                         },
                         icon: const Icon(Icons.image),
-                        label: const Text("Medya Seç"),
+                        label: const Text("Medya Seç", style: TextStyle(color: Colors.blue),),
                       ),
                       if (medyaList.isNotEmpty)
                         Padding(
@@ -160,11 +155,13 @@ class _PaylasimlarScreenState extends State<PaylasimlarScreen> {
                         ),
                       ElevatedButton.icon(
                         onPressed: () async {
-                          final status = await Permission.storage.request();
-                          if (!status.isGranted) {
+                          final izinVar = await _isteBelgeIzni();
+
+                          if (!izinVar) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(
-                                  content: Text("Belge seçmek için depolama izni gerekli.")),
+                                content: Text("Belge seçmek için dosya erişim izni gerekli."),
+                              ),
                             );
                             return;
                           }
@@ -181,8 +178,9 @@ class _PaylasimlarScreenState extends State<PaylasimlarScreen> {
                           }
                         },
                         icon: const Icon(Icons.attach_file),
-                        label: const Text("Belge Seç"),
+                        label: const Text("Belge Seç", style: TextStyle(color: Colors.blue),),
                       ),
+
                       if (belgeName != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 8.0),
@@ -205,10 +203,10 @@ class _PaylasimlarScreenState extends State<PaylasimlarScreen> {
                         children: [
                           TextButton(
                             onPressed: () => Navigator.pop(context),
-                            child: const Text(
-                              "İptal",
-                              style: TextStyle(color: Colors.red),
+                            style: TextButton.styleFrom(
+                              foregroundColor: Colors.blue, // Yazı rengini mavi yapar
                             ),
+                            child: const Text("İptal"),
                           ),
                           ElevatedButton(
                             onPressed: () async {
@@ -260,6 +258,9 @@ class _PaylasimlarScreenState extends State<PaylasimlarScreen> {
 
                               if (mounted) Navigator.pop(context);
                             },
+                            style: ElevatedButton.styleFrom(
+                              foregroundColor: Colors.blue, // Yazı ve ikon rengini mavi yapar
+                            ),
                             child: const Text("Paylaş"),
                           ),
                         ],
@@ -273,6 +274,37 @@ class _PaylasimlarScreenState extends State<PaylasimlarScreen> {
         );
       },
     );
+  }
+
+  Future<bool> _isteBelgeIzni() async {
+    if (Platform.isAndroid) {
+      final androidVersion = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
+
+      if (androidVersion >= 29) {
+        // Android 10+ Scoped Storage kullanılıyor, FilePicker ile izin otomatik
+        return true;
+      } else {
+        // Android 9 ve öncesi
+        final status = await Permission.storage.request();
+        return status.isGranted;
+      }
+    }
+    return true; // iOS
+  }
+
+  Future<bool> _isteDepoIzni() async {
+    // Aynı şekilde medya için de izin artık gerekmiyor
+    if (Platform.isAndroid) {
+      final androidVersion = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
+
+      if (androidVersion >= 29) {
+        return true; // FilePicker ile seçim yeterli
+      } else {
+        final status = await Permission.storage.request();
+        return status.isGranted;
+      }
+    }
+    return true; // iOS
   }
 
   void _paylasimiSilSor(String docId) async {

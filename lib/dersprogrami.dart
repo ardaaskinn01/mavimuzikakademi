@@ -594,7 +594,6 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
     selectedStudentId = widget.initialStudentId;
     selectedStudentName = widget.initialStudentName;
 
-    // If initial values are provided, we should load the filtered students
     if (widget.initialTeacherId != null) {
       _loadStudentsForTeacher(widget.initialTeacherId!);
     }
@@ -603,13 +602,9 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
   Future<void> _loadStudentsForTeacher(String teacherId) async {
     final firestore = FirebaseFirestore.instance;
     final teacherDoc = await firestore.collection('users').doc(teacherId).get();
-    // Corrected: Retrieve 'branches' as a List<String>
     final List<String> teacherBranches = List<String>.from(teacherDoc['branches'] ?? []);
 
-    final parentSnapshot = await firestore
-        .collection('users')
-        .where('role', isEqualTo: 'parent')
-        .get();
+    final parentSnapshot = await firestore.collection('users').where('role', isEqualTo: 'parent').get();
 
     List<Map<String, dynamic>> matchingStudents = [];
 
@@ -620,10 +615,9 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
 
       for (var student in students) {
         final studentBranches = List<String>.from(student['branches'] ?? []);
-        // Corrected: Check for intersection of teacher and student branches
         if (teacherBranches.any((branch) => studentBranches.contains(branch))) {
           matchingStudents.add({
-            'parentId': parentId, // Changed 'id' to 'parentId' for consistency with AddEventDialog
+            'parentId': parentId,
             'name': student['name'],
           });
         }
@@ -650,39 +644,16 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
       content: SingleChildScrollView(
         child: Column(
           children: [
-            // Tarih seçici
-            TextFormField(
-              readOnly: true,
-              decoration: InputDecoration(
-                labelText: 'Tarih Seç',
-                suffixIcon: Icon(Icons.calendar_today),
-              ),
-              onTap: () async {
-                final now = DateTime.now();
-                final picked = await showDatePicker(
-                  context: context,
-                  locale: const Locale('tr', 'TR'),
-                  initialDate: selectedDate ?? now,
-                  firstDate: now.subtract(const Duration(days: 365)),
-                  lastDate: now.add(const Duration(days: 365)),
-                );
-                if (picked != null) {
-                  setState(() {
-                    selectedDate = picked;
-                  });
-                }
-              },
-              controller: TextEditingController(
-                text: selectedDate != null ? DateFormat('dd.MM.yyyy').format(selectedDate!) : '',
-              ),
-            ),
-
-            const SizedBox(height: 10),
-
+            // Eğitmen Seçimi - En üstte
             FutureBuilder<QuerySnapshot>(
               future: firestore.collection('users').where('role', isEqualTo: 'teacher').get(),
               builder: (context, snapshot) {
-                if (!snapshot.hasData) return const CircularProgressIndicator();
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const CircularProgressIndicator();
+                }
+                if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                  return const Text('Eğitmen bulunamadı.');
+                }
                 final teachers = snapshot.data!.docs;
 
                 return DropdownButtonFormField<String>(
@@ -697,7 +668,9 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                   onChanged: (val) async {
                     setState(() {
                       selectedTeacherId = val;
-                      // Clear previously filtered students when teacher changes
+                      // Eğitmen değişince tarih ve saati sıfırla
+                      selectedDate = null;
+                      selectedTime = null;
                       filteredStudents = [];
                       selectedStudentId = null;
                       selectedStudentName = null;
@@ -712,25 +685,102 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
 
             const SizedBox(height: 10),
 
-            DropdownButtonFormField<String>(
-              decoration: const InputDecoration(labelText: 'Saat Seç'),
-              items: timeSlots.map((slot) {
-                return DropdownMenuItem<String>(
-                  value: slot['label'] as String,
-                  child: Text(slot['label'] as String),
+            // Tarih seçici - Eğitmen seçili değilse pasif
+            TextFormField(
+              readOnly: true,
+              enabled: selectedTeacherId != null,
+              decoration: InputDecoration(
+                labelText: 'Tarih Seç',
+                suffixIcon: const Icon(Icons.calendar_today),
+                enabled: selectedTeacherId != null, // Ek kontrol
+              ),
+              onTap: selectedTeacherId != null ? () async {
+                final now = DateTime.now();
+                final picked = await showDatePicker(
+                  context: context,
+                  locale: const Locale('tr', 'TR'),
+                  initialDate: selectedDate ?? now,
+                  firstDate: now.subtract(const Duration(days: 365)),
+                  lastDate: now.add(const Duration(days: 365)),
                 );
-              }).toList(),
-              onChanged: (val) => selectedTime = val,
+                if (picked != null) {
+                  setState(() {
+                    selectedDate = picked;
+                    selectedTime = null; // Tarih değişince saati sıfırla
+                  });
+                }
+              } : null,
+              controller: TextEditingController(
+                text: selectedDate != null ? DateFormat('dd.MM.yyyy').format(selectedDate!) : '',
+              ),
             ),
 
             const SizedBox(height: 10),
 
+            // Saat seçimi - Eğitmen ve tarih seçili değilse pasif ve çakışma kontrolü
+            FutureBuilder<QuerySnapshot>(
+              future: (selectedTeacherId != null && selectedDate != null)
+                  ? firestore.collection('lessons').where('teacherId', isEqualTo: selectedTeacherId).get()
+                  : null,
+              builder: (context, snapshot) {
+                if (selectedTeacherId == null || selectedDate == null) {
+                  return DropdownButtonFormField<String>(
+                    decoration: const InputDecoration(labelText: 'Saat Seç'),
+                    items: const [],
+                    onChanged: null,
+                    hint: const Text('Önce gün ve eğitmen seçin'),
+                  );
+                }
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator());
+                }
+
+                final lessons = snapshot.data?.docs ?? [];
+                final reservedTimes = lessons
+                    .where((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  final lessonDate = (data['date'] as Timestamp).toDate();
+                  return lessonDate.weekday == selectedDate!.weekday;
+                })
+                    .map((doc) => (doc['time'] as String))
+                    .toSet();
+
+                return DropdownButtonFormField<String>(
+                  decoration: const InputDecoration(labelText: 'Saat Seç'),
+                  value: selectedTime,
+                  items: timeSlots.map((slot) {
+                    final timeLabel = slot['label'] as String;
+                    final isReserved = reservedTimes.contains(timeLabel);
+                    return DropdownMenuItem<String>(
+                      value: isReserved ? null : timeLabel,
+                      enabled: !isReserved,
+                      child: Text(
+                        timeLabel,
+                        style: TextStyle(
+                          color: isReserved ? Colors.grey : Colors.black,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (val) {
+                    setState(() => selectedTime = val);
+                  },
+                );
+              },
+            ),
+
+            const SizedBox(height: 10),
+
+            // Öğrenci seçimi
             if (filteredStudents.isNotEmpty)
               DropdownButtonFormField<String>(
-                decoration: const InputDecoration(labelText: 'Öğrenci Seç'),
-                value: selectedStudentId != null && filteredStudents.any((s) => s['parentId'] == selectedStudentId && s['name'] == selectedStudentName)
+                decoration: InputDecoration(
+                  labelText: 'Öğrenci Seç',
+                  enabled: selectedTeacherId != null,
+                ),
+                value: selectedStudentId != null && selectedStudentName != null
                     ? "${selectedStudentId}_$selectedStudentName"
-                    : null, // Set to null if current student isn't in filtered list
+                    : null,
                 items: filteredStudents.map((student) {
                   final uniqueValue = "${student['parentId']}_${student['name']}";
                   return DropdownMenuItem<String>(
@@ -763,7 +813,6 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                 selectedDate != null) {
               final teacherDoc = await firestore.collection('users').doc(selectedTeacherId).get();
               final teacherName = teacherDoc['name'];
-              // Corrected: Retrieve 'branches' and use the first branch if available
               final List<dynamic> branches = teacherDoc['branches'] ?? [];
               final branch = branches.isNotEmpty ? branches[0] : null;
 
@@ -793,6 +842,12 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
               await newDocRef.set(event);
               widget.onSave(selectedDate!, event);
               Navigator.pop(context);
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Lütfen tüm alanları doldurun.'),
+                ),
+              );
             }
           },
           child: const Text('Kaydet'),

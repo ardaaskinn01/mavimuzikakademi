@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -135,13 +136,22 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> pickAndSendFile() async {
     if (widget.isReadOnly) return;
 
-    final status = await Permission.storage.request();
-    if (!status.isGranted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Dosya göndermek için depolama izni gerekli.")),
-      );
-      return;
+    if (Platform.isAndroid) {
+      final androidVersion = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
+
+      if (androidVersion < 29) {
+        // Android 9 ve öncesi: storage izni gerekli
+        final status = await Permission.storage.request();
+        if (!status.isGranted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("Dosya göndermek için depolama izni gerekli.")),
+          );
+          return;
+        }
+      }
+      // Android 10+ için ek izin gerekmez
     }
+
     final result = await FilePicker.platform.pickFiles();
 
     if (result != null && result.files.single.path != null) {

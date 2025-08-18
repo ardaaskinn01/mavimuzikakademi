@@ -81,7 +81,7 @@ class _PeopleScreenState extends State<PeopleScreen> {
       // Veliyse, çocuğunun öğretmenlerini bul.
       final lessonsSnapshot = await FirebaseFirestore.instance
           .collection('lessons')
-          .where('parentId', isEqualTo: currentUserId)
+          .where('studentId', isEqualTo: currentUserId)
           .get();
       for (var lesson in lessonsSnapshot.docs) {
         if (lesson.data().containsKey('teacherId') && lesson['teacherId'] != null) {
