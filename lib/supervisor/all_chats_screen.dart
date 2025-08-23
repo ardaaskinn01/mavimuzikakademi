@@ -1,11 +1,16 @@
+// all_chats_screen.dart
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import '../chat_screen.dart';
 
 class ChatLogPage extends StatefulWidget {
   const ChatLogPage({super.key});
@@ -16,7 +21,7 @@ class ChatLogPage extends StatefulWidget {
 
 class _ChatLogPageState extends State<ChatLogPage> {
   String searchQuery = '';
-  Map<String, String> userNames = {};
+  Map<String, String?> userNames = {};
   final _key = encrypt.Key.fromUtf8('mkqcjwefsxgerbwhxmmlfnfdqrjbbadb');
   final _iv = encrypt.IV.fromUtf8('1234567890123456');
   late final encrypt.Encrypter _encrypter;
@@ -26,70 +31,22 @@ class _ChatLogPageState extends State<ChatLogPage> {
   late Stream<Duration?> _durationStream;
   late Stream<bool> _playingStream;
 
-  bool isAudioFile(String url) {
-    return url.endsWith('.mp3') ||
-        url.endsWith('.wav') ||
-        url.endsWith('.m4a') ||
-        url.endsWith('.aac');
-  }
-
   @override
   void initState() {
     super.initState();
-    _fetchUserNames();
-    _encrypter = encrypt.Encrypter(encrypt.AES(_key));
+    _encrypter = encrypt.Encrypter(
+      encrypt.AES(_key, mode: encrypt.AESMode.cbc),
+    );
     _initAudioPlayer();
+    _fetchUserNames();
   }
 
-  Future<void> _initAudioPlayer() async {
+  void _initAudioPlayer() async {
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
-
     _positionStream = _audioPlayer.positionStream;
     _durationStream = _audioPlayer.durationStream;
     _playingStream = _audioPlayer.playingStream;
-  }
-
-  Future<void> _fetchUserNames() async {
-    final usersSnapshot =
-        await FirebaseFirestore.instance.collection('users').get();
-    final namesMap = {
-      for (var doc in usersSnapshot.docs) doc.id: doc['name'] ?? 'Bilinmeyen',
-    };
-
-    setState(() {
-      userNames = namesMap.map((key, value) => MapEntry(key, value.toString()));
-    });
-  }
-
-  String formatTimestamp(Timestamp? timestamp) {
-    if (timestamp == null) return '';
-    final date = timestamp.toDate();
-    return DateFormat('dd MMM yyyy, HH:mm', 'tr_TR').format(date);
-  }
-
-  String decryptMessage(String encrypted) {
-    try {
-      return _encrypter.decrypt64(encrypted, iv: _iv);
-    } catch (e) {
-      return '[Şifreli Mesaj]';
-    }
-  }
-
-  void _launchURL(String url) async {
-    if (!url.startsWith('http')) url = 'https://$url';
-    if (await canLaunchUrl(Uri.parse(url))) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    } else {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("URL açılamıyor.")));
-    }
-  }
-
-  bool isUrl(String text) {
-    final urlPattern = r'^(https?:\/\/)[\w\-\.]+\.\w{2,}(\/\S*)?$';
-    return RegExp(urlPattern, caseSensitive: false).hasMatch(text);
   }
 
   @override
@@ -98,196 +55,159 @@ class _ChatLogPageState extends State<ChatLogPage> {
     super.dispose();
   }
 
+  Future<void> _fetchUserNames() async {
+    final chatDocs = await FirebaseFirestore.instance.collection('chats').get();
+    final userIds = chatDocs.docs.map((doc) => doc.id.split('_')).expand((ids) => ids).toSet().toList();
+
+    for (var userId in userIds) {
+      if (!userNames.containsKey(userId)) {
+        await getUserName(userId);
+      }
+    }
+    setState(() {});
+  }
+
+  bool isAudioFile(String url) {
+    return url.endsWith('.mp3') ||
+        url.endsWith('.wav') ||
+        url.endsWith('.m4a') ||
+        url.endsWith('.aac') ||
+        url.endsWith('.ogg');
+  }
+
+  Future<String?> getUserName(String userId) async {
+    if (userNames.containsKey(userId)) {
+      return userNames[userId];
+    }
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+      if (doc.exists) {
+        final name = doc.data()?['name'];
+        if (name != null && name.isNotEmpty) {
+          userNames[userId] = name;
+          return name;
+        }
+      }
+      return null; // Kullanıcı bulunamazsa null döndür
+    } catch (e) {
+      print("Error fetching user name: $e");
+      return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
-          'Mesaj Kayıtları',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+          'Tüm Sohbetler',
+          style: TextStyle(color: Colors.white),
         ),
         backgroundColor: Colors.blue[800],
-        elevation: 0,
-        centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-        ),
       ),
-      backgroundColor: Colors.blue[50],
       body: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.blue.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
+            padding: const EdgeInsets.all(8.0),
+            child: TextField(
+              decoration: const InputDecoration(
+                labelText: 'Sohbetlerde ara',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.search),
               ),
-              child: TextField(
-                decoration: InputDecoration(
-                  hintText: "Mesaj ara...",
-                  prefixIcon: Icon(Icons.search, color: Colors.blue[700]),
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 14,
-                  ),
-                ),
-                onChanged: (value) {
-                  setState(() {
-                    searchQuery = value.toLowerCase();
-                  });
-                },
-              ),
+              onChanged: (value) {
+                setState(() {
+                  searchQuery = value;
+                });
+              },
             ),
           ),
           Expanded(
             child: StreamBuilder<QuerySnapshot>(
-              stream:
-                  FirebaseFirestore.instance
-                      .collection('messages')
-                      .orderBy('timestamp', descending: true)
-                      .snapshots(),
-              builder: (context, snapshot) {
-                if (!snapshot.hasData || userNames.isEmpty) {
-                  return Center(
-                    child: CircularProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                        Colors.blue[700]!,
-                      ),
-                    ),
-                  );
+              stream: FirebaseFirestore.instance.collection('chats').snapshots(),
+              builder: (context, chatSnapshot) {
+                if (!chatSnapshot.hasData) {
+                  return const Center(child: CircularProgressIndicator());
                 }
 
-                final messages = snapshot.data!.docs;
-
-                final filteredMessages =
-                    messages.where((doc) {
-                      final rawText = (doc['text'] ?? '').toString();
-                      final decrypted = decryptMessage(rawText);
-                      return searchQuery.isEmpty ||
-                          decrypted.toLowerCase().contains(searchQuery);
-                    }).toList();
-
-                if (filteredMessages.isEmpty) {
-                  return Center(
-                    child: Text(
-                      "Hiç mesaj bulunamadı.",
-                      style: TextStyle(color: Colors.blue[800], fontSize: 16),
-                    ),
-                  );
-                }
+                final chatDocs = chatSnapshot.data!.docs;
 
                 return ListView.builder(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-                  itemCount: filteredMessages.length,
+                  itemCount: chatDocs.length,
                   itemBuilder: (context, index) {
-                    final doc = filteredMessages[index];
-                    final senderId = doc['senderId'];
-                    final receiverId = doc['receiverId'];
-                    final isFile = doc['isFile'] ?? false;
-                    final rawText = doc['text'] ?? '';
-                    final fileUrl = isFile ? rawText : null;
-                    final decryptedText =
-                        isFile ? fileUrl! : decryptMessage(rawText);
-                    final timestamp = doc['timestamp'] as Timestamp?;
-                    final timeString =
-                        timestamp != null
-                            ? DateFormat(
-                              'dd MMMM yyyy, HH:mm',
-                              'tr_TR',
-                            ).format(timestamp.toDate())
-                            : '';
+                    final chatDoc = chatDocs[index];
+                    final chatRoomId = chatDoc.id;
+                    final users = chatRoomId.split('_');
+                    final user1Id = users[0];
+                    final user2Id = users[1];
 
-                    final senderName = userNames[senderId] ?? senderId;
-                    final receiverName = userNames[receiverId] ?? receiverId;
-                    String displayText = decryptedText;
-                    if (isFile) {
-                      try {
-                        final uri = Uri.parse(decryptedText);
-                        displayText = uri.pathSegments.last;
-                      } catch (e) {
-                        displayText = decryptedText;
-                      }
-                    }
-                    final contentWidget = _getMessageContentWidget(
-                        decryptedText,
-                        isFile,
-                        fileUrl,
-                        timestamp
-                    );
+                    return FutureBuilder<List<String?>>(
+                      future: Future.wait([
+                        getUserName(user1Id),
+                        getUserName(user2Id),
+                      ]),
+                      builder: (context, nameSnapshot) {
+                        if (!nameSnapshot.hasData) {
+                          return const ListTile(title: Text('Yükleniyor...'));
+                        }
 
-                    return Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.blue.withOpacity(0.1),
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
+                        final names = nameSnapshot.data!;
+                        final user1Name = names[0];
+                        final user2Name = names[1];
+
+                        if (user1Name == null || user2Name == null) {
+                          // Eğer kullanıcılardan biri bulunamazsa bu sohbeti gösterme
+                          return const SizedBox.shrink();
+                        }
+
+                        // Arama filtresi
+                        if (searchQuery.isNotEmpty) {
+                          if (!user1Name.toLowerCase().contains(searchQuery.toLowerCase()) &&
+                              !user2Name.toLowerCase().contains(searchQuery.toLowerCase())) {
+                            return const SizedBox.shrink();
+                          }
+                        }
+
+                        return Card(
+                          elevation: 4,
+                          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(15),
                           ),
-                        ],
-                      ),
-                      child: Card(
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        elevation: 0,
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(6),
-                                    decoration: BoxDecoration(
-                                      color: Colors.blue[50],
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    child: Icon(
-                                      Icons.person,
-                                      color: Colors.blue[700],
-                                      size: 18,
-                                    ),
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.all(16),
+                            title: Text(
+                              '$user1Name & $user2Name', // Hata bu satırda düzeltildi
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            onTap: () {
+                              final currentUser = FirebaseAuth.instance.currentUser;
+                              if (currentUser == null) return;
+
+                              final isSupervisorsChat = user1Id == currentUser.uid || user2Id == currentUser.uid;
+
+                              String otherUserId = user1Id;
+                              if (user1Id == currentUser.uid) {
+                                otherUserId = user2Id;
+                              } else if (user2Id == currentUser.uid) {
+                                otherUserId = user1Id;
+                              }
+
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ChatScreen(
+                                    receiverId: otherUserId,
+                                    isReadOnly: !isSupervisorsChat,
+                                    chatParticipants: [user1Id, user2Id],
                                   ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      "$senderName → $receiverName",
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.blue[900],
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 12),
-                              // Buradaki if-else yapısını contentWidget ile değiştiriyoruz
-                              _getMessageContentWidget(decryptedText, isFile, fileUrl, timestamp),
-                              const SizedBox(height: 12),
-                              Text(
-                                timeString,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.blue[600],
                                 ),
-                              ),
-                            ],
+                              );
+                            },
                           ),
-                        ),
-                      ),
+                        );
+                      },
                     );
                   },
                 );
@@ -298,181 +218,12 @@ class _ChatLogPageState extends State<ChatLogPage> {
       ),
     );
   }
-  Widget _getMessageContentWidget(
-      String decryptedText,
-      bool isFile,
-      String? fileUrl,
-      Timestamp? timestamp
-      ) {
-    // Eğer dosya ise ve ses dosyasıysa
-    if (isFile && fileUrl != null && isAudioFile(fileUrl)) {
-      return _buildAudioPlayer(fileUrl);
-    }
-    // Eğer dosya ise ama ses dosyası değilse
-    else if (isFile && fileUrl != null) {
-      return _buildFilePreview(fileUrl);
-    }
-    // Eğer metin mesajı ama bir ses dosyası URL'si içeriyorsa
-    else if (isAudioFile(decryptedText)) {
-      return _buildAudioPlayer(decryptedText);
-    }
-    // Normal metin mesajı
-    else {
-      return Text(
-        decryptedText,
-        style: TextStyle(color: Colors.blue[800]),
-      );
-    }
-  }
 
-  Widget _buildAudioPlayer(String audioUrl) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          "Ses Mesajı",
-          style: TextStyle(
-            fontWeight: FontWeight.bold,
-            color: Colors.blue[800],
-          ),
-        ),
-        const SizedBox(height: 8),
-        StreamBuilder<bool>(
-          stream: _playingStream,
-          builder: (context, snapshot) {
-            final isPlaying = snapshot.data ?? false;
-            final isCurrentAudio = _currentlyPlayingUrl == audioUrl;
-            return Column(
-              children: [
-                Row(
-                  children: [
-                    IconButton(
-                      icon: Icon(
-                        isCurrentAudio && isPlaying
-                            ? Icons.pause
-                            : Icons.play_arrow,
-                        color: Colors.blue[700],
-                      ),
-                      onPressed: () => _toggleAudioPlayback(audioUrl),
-                    ),
-                    Expanded(
-                      child: _buildProgressSlider(audioUrl),
-                    ),
-                  ],
-                ),
-                _buildDurationText(),
-              ],
-            );
-          },
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFilePreview(String fileUrl) {
-    String fileName;
-    try {
-      final uri = Uri.parse(fileUrl);
-      fileName = uri.pathSegments.last;
-    } catch (e) {
-      fileName = fileUrl;
-    }
-
-    return InkWell(
-      onTap: () => _launchURL(fileUrl),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Colors.blue[50],
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Row(
-          children: [
-            Icon(Icons.insert_drive_file, color: Colors.blue[700]),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                fileName,
-                style: const TextStyle(
-                  color: Colors.blue,
-                  decoration: TextDecoration.underline,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildProgressSlider(String audioUrl) {
-    return StreamBuilder<Duration?>(
-      stream: _durationStream,
-      builder: (context, durationSnapshot) {
-        final duration = durationSnapshot.data ?? Duration.zero;
-        return StreamBuilder<Duration>(
-          stream: _positionStream,
-          builder: (context, positionSnapshot) {
-            var position = positionSnapshot.data ?? Duration.zero;
-            if (position > duration) position = duration;
-
-            return SliderTheme(
-              data: SliderThemeData(
-                trackHeight: 2,
-                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
-              ),
-              child: Slider(
-                min: 0,
-                max: duration.inSeconds.toDouble(),
-                value: position.inSeconds.toDouble(),
-                onChanged: (value) {
-                  _audioPlayer.seek(Duration(seconds: value.toInt()));
-                },
-                activeColor: Colors.blue[700],
-                inactiveColor: Colors.blue[100],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildDurationText() {
-    return StreamBuilder<Duration?>(
-      stream: _durationStream,
-      builder: (context, durationSnapshot) {
-        final duration = durationSnapshot.data ?? Duration.zero;
-        return StreamBuilder<Duration>(
-          stream: _positionStream,
-          builder: (context, positionSnapshot) {
-            var position = positionSnapshot.data ?? Duration.zero;
-            if (position > duration) position = duration;
-
-            return Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  _formatDuration(position),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.blue[600],
-                  ),
-                ),
-                Text(
-                  _formatDuration(duration),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.blue[600],
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, "0");
+    final minutes = twoDigits(duration.inMinutes.remainder(60));
+    final seconds = twoDigits(duration.inSeconds.remainder(60));
+    return "$minutes:$seconds";
   }
 
   Future<void> _toggleAudioPlayback(String audioUrl) async {
@@ -488,10 +239,72 @@ class _ChatLogPageState extends State<ChatLogPage> {
     }
   }
 
-  String _formatDuration(Duration duration) {
-    String twoDigits(int n) => n.toString().padLeft(2, "0");
-    final minutes = twoDigits(duration.inMinutes.remainder(60));
-    final seconds = twoDigits(duration.inSeconds.remainder(60));
-    return "$minutes:$seconds";
+  Widget _buildAudioMessage(String audioUrl) {
+    return Column(
+      children: [
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            StreamBuilder<bool>(
+              stream: _playingStream,
+              builder: (context, playingSnapshot) {
+                final isPlaying = playingSnapshot.data ?? false;
+                final isCurrentAudio = _currentlyPlayingUrl == audioUrl;
+
+                return IconButton(
+                  icon: Icon(
+                    isCurrentAudio && isPlaying
+                        ? Icons.pause_circle_filled
+                        : Icons.play_circle_fill,
+                  ),
+                  onPressed: () => _toggleAudioPlayback(audioUrl),
+                );
+              },
+            ),
+            Expanded(
+              child: StreamBuilder<Duration?>(
+                stream: _durationStream,
+                builder: (context, durationSnapshot) {
+                  final duration = durationSnapshot.data ?? Duration.zero;
+                  return StreamBuilder<Duration>(
+                    stream: _positionStream,
+                    builder: (context, positionSnapshot) {
+                      var position = positionSnapshot.data ?? Duration.zero;
+                      if (position > duration) position = duration;
+                      return LinearProgressIndicator(
+                        value: duration.inMilliseconds > 0
+                            ? position.inMilliseconds / duration.inMilliseconds
+                            : 0,
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+        StreamBuilder<Duration?>(
+          stream: _durationStream,
+          builder: (context, durationSnapshot) {
+            final duration = durationSnapshot.data ?? Duration.zero;
+            return StreamBuilder<Duration>(
+              stream: _positionStream,
+              builder: (context, positionSnapshot) {
+                var position = positionSnapshot.data ?? Duration.zero;
+                if (position > duration) position = duration;
+
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(_formatDuration(position)),
+                    Text(_formatDuration(duration)),
+                  ],
+                );
+              },
+            );
+          },
+        ),
+      ],
+    );
   }
 }

@@ -24,6 +24,9 @@ class _AddEventDialogState extends State<AddEventDialog> {
   DateTime? selectedDay;
   List<Map<String, dynamic>> filteredStudents = [];
   bool isLoadingStudents = false;
+  String? selectedBranch;
+  List<String> availableBranches = [];
+  List<DocumentSnapshot> teachers = [];
 
   @override
   Widget build(BuildContext context) {
@@ -54,7 +57,8 @@ class _AddEventDialogState extends State<AddEventDialog> {
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                   return const Text('Eğitmen bulunamadı.');
                 }
-                final teachers = snapshot.data!.docs;
+                final teacherDocs = snapshot.data!.docs;
+                teachers = teacherDocs;
                 return DropdownButtonFormField<String>(
                   decoration: const InputDecoration(labelText: 'Eğitmen Seç'),
                   value: selectedTeacherId, // Bu satır eklendi
@@ -88,6 +92,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
                           matchingStudents.add({
                             'parentId': doc.id,
                             'name': student['name'],
+                            'branches': student['branches'], // eklendi
                           });
                         }
                       }
@@ -189,16 +194,41 @@ class _AddEventDialogState extends State<AddEventDialog> {
                     child: Text(student['name']),
                   );
                 }).toList(),
-                onChanged: (val) {
-                  if (val != null) {
-                    setState(() {
-                      final selected = filteredStudents.firstWhere(
-                            (s) => "${s['parentId']}_${s['name']}" == val,
-                      );
-                      selectedStudentId = selected['parentId'];
-                      selectedStudentName = selected['name'];
-                    });
+                  onChanged: (val) {
+                    if (val != null) {
+                      setState(() {
+                        final selected = filteredStudents.firstWhere(
+                              (s) => "${s['parentId']}_${s['name']}" == val,
+                        );
+                        selectedStudentId = selected['parentId'];
+                        selectedStudentName = selected['name'];
+
+                        // Ortak branşları bul
+                        final teacherDoc = teachers.firstWhere((t) => t.id == selectedTeacherId);
+                        final teacherBranches = List<String>.from(teacherDoc['branches'] ?? []);
+                        final studentBranches = List<String>.from(selected['branches'] ?? []);
+                        availableBranches = teacherBranches
+                            .where((b) => studentBranches.contains(b))
+                            .toList();
+
+                        selectedBranch = null; // yeniden seçtirsin
+                      });
+                    }
                   }
+              ),
+            const SizedBox(height: 10),
+            if (availableBranches.isNotEmpty)
+              DropdownButtonFormField<String>(
+                decoration: const InputDecoration(labelText: 'Branş Seç'),
+                value: selectedBranch,
+                items: availableBranches.map((branch) {
+                  return DropdownMenuItem(
+                    value: branch,
+                    child: Text(branch),
+                  );
+                }).toList(),
+                onChanged: (val) {
+                  setState(() => selectedBranch = val);
                 },
               ),
           ],
@@ -225,7 +255,6 @@ class _AddEventDialogState extends State<AddEventDialog> {
                 );
                 return;
               }
-
               final newDocRef = firestore.collection('lessons').doc();
               final event = {
                 'id': newDocRef.id,
@@ -233,7 +262,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
                 'time': selectedTime,
                 'teacherId': selectedTeacherId,
                 'teacherName': teacherName,
-                'branch': branch,
+                'branch': selectedBranch,
                 'studentId': selectedStudentId,
                 'studentName': selectedStudentName,
                 'recurring': true,

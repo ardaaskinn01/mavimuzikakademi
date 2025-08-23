@@ -6,6 +6,9 @@ import 'package:intl/intl.dart';
 import '../dersprogrami.dart';
 import '../devamsizliklar.dart';
 
+// Assuming AddMakeupEventDialog is defined elsewhere
+// and used in the same way.
+
 class SupervisorStudentListScreen extends StatefulWidget {
   const SupervisorStudentListScreen({super.key});
 
@@ -15,23 +18,56 @@ class SupervisorStudentListScreen extends StatefulWidget {
 
 class _SupervisorStudentListScreenState extends State<SupervisorStudentListScreen> {
   final userId = FirebaseAuth.instance.currentUser!.uid;
-  final Map<String, bool> expandedMap = {};
   String? userRole;
-
-  Future<void> getUserRole() async {
-    final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
-    setState(() {
-      userRole = doc['role']; // "teacher", "supervisor", vs.
-    });
-  }
+  String? selectedStudentId; // Will store the selected student's name for simplicity
+  List<Map<String, dynamic>> allStudents = [];
+  List<Map<String, dynamic>> studentAbsences = [];
 
   @override
   void initState() {
     super.initState();
     getUserRole();
+    loadAllStudents();
   }
 
-  Future<List<Map<String, dynamic>>> getStudentAbsences(String studentName) async {
+  Future<void> getUserRole() async {
+    final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+    setState(() {
+      userRole = doc['role'];
+    });
+  }
+
+  Future<void> loadAllStudents() async {
+    final parentsQuery = await FirebaseFirestore.instance
+        .collection('users')
+        .where('role', isEqualTo: 'parent')
+        .get();
+
+    final List<Map<String, dynamic>> students = [];
+    for (var parent in parentsQuery.docs) {
+      final parentData = parent.data();
+      final parentId = parent.id;
+      final parentName = parentData['name'];
+      final studentList = List<Map<String, dynamic>>.from(parentData['students'] ?? []);
+
+      for (var student in studentList) {
+        students.add({
+          ...student,
+          'parentName': parentName,
+          'parentId': parentId,
+        });
+      }
+    }
+    setState(() {
+      allStudents = students;
+      if (allStudents.isNotEmpty) {
+        selectedStudentId = allStudents.first['name'];
+        loadStudentAbsences(selectedStudentId!);
+      }
+    });
+  }
+
+  Future<void> loadStudentAbsences(String studentName) async {
     final lessonsQuery = await FirebaseFirestore.instance
         .collection('lessons')
         .where('studentName', isEqualTo: studentName)
@@ -44,7 +80,7 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
           .collection('lessons')
           .doc(lesson.id)
           .collection('attendances')
-          .doc(lesson['studentId']) // öğrenci ID'si burada tutuluyor
+          .doc(lesson['studentId'])
           .get();
 
       if (attendanceDoc.exists) {
@@ -53,11 +89,16 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
           'date': (data['timestamp'] as Timestamp).toDate(),
           'status': data['status'] ?? 'bilinmiyor',
           'lessonBranch': lesson['branch'] ?? 'Branş yok',
+          'teacherId': lesson['teacherId'],
+          'teacherName': lesson['teacherName'],
+          'studentId': lesson['studentId'] ?? allStudents.firstWhere((s) => s['name'] == studentName)['parentId'],
         });
       }
     }
 
-    return absences;
+    setState(() {
+      studentAbsences = absences;
+    });
   }
 
   @override
@@ -93,241 +134,152 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
         ]
             : null,
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('users')
-            .where('role', isEqualTo: 'parent')
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-
-          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-            return const Center(child: Text('Veli bulunamadı.'));
-          }
-
-          final parents = snapshot.data!.docs;
-
-          // Tüm öğrencileri topla
-          final List<Map<String, dynamic>> allStudents = [];
-          for (var parent in parents) {
-            final parentData = parent.data() as Map<String, dynamic>;
-            final parentId = parent.id;
-            final parentName = parentData['name'];
-            final students = List<Map<String, dynamic>>.from(parentData['students'] ?? []);
-
-            for (var student in students) {
-              allStudents.add({
-                ...student,
-                'parentName': parentName,
-                'parentId': parentId,
-              });
-            }
-          }
-
-          if (allStudents.isEmpty) {
-            return const Center(child: Text('Kayıtlı öğrenci bulunamadı.'));
-          }
-
-          return ListView.builder(
-            itemCount: allStudents.length,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            itemBuilder: (context, index) {
-              final student = allStudents[index];
-              final studentName = student['name'];
-              final parentId = student['parentId'];
-              final isExpanded = expandedMap[studentName] ?? false;
-
-              return Container(
-                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      body: Column(
+        children: [
+          if (allStudents.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.blue.withOpacity(0.1),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Card(
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16)),
-                  elevation: 0,
                   color: Colors.white,
-                  child: Column(
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.blue[50],
-                          borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(16)),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.blue[100]!),
+                ),
+                child: DropdownButton<String>(
+                  value: selectedStudentId,
+                  isExpanded: true,
+                  underline: const SizedBox(),
+                  items: allStudents.map((student) {
+                    return DropdownMenuItem<String>(
+                      value: student['name'],
+                      child: Text(
+                        "${student['name']} - Veli: ${student['parentName']}",
+                        style: TextStyle(color: Colors.blue[900]),
+                      ),
+                    );
+                  }).toList(),
+                  onChanged: (String? newValue) {
+                    if (newValue != null) {
+                      setState(() {
+                        selectedStudentId = newValue;
+                        studentAbsences = []; // Clear absences while loading
+                      });
+                      loadStudentAbsences(newValue);
+                    }
+                  },
+                ),
+              ),
+            ),
+          Expanded(
+            child: FutureBuilder<void>(
+              future: allStudents.isNotEmpty ? Future.value() : loadAllStudents(),
+              builder: (context, snapshot) {
+                if (allStudents.isEmpty) {
+                  return const Center(child: Text('Kayıtlı öğrenci bulunamadı.'));
+                }
+
+                if (studentAbsences.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text("Devamsızlık bilgisi bulunamadı."),
+                  );
+
+                return ListView(
+                  children: [
+                    if (selectedStudentId != null)
+                      Padding(
+                        padding: const EdgeInsets.all(16.0),
+                        child: Text(
+                          "$selectedStudentId Devamsızlıkları",
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
                         ),
+                      ),
+                    if (studentAbsences.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text("Devamsızlık bilgisi bulunamadı."),
+                      ),
+                    ...studentAbsences.map((entry) {
+                      final formattedDate = DateFormat('dd MMMM yyyy', 'tr_TR').format(entry['date']);
+                      return Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 12),
+                          dense: true,
+                          leading: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: getStatusColor(entry['status']).withOpacity(0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              getStatusIcon(entry['status']),
+                              color: getStatusColor(entry['status']),
+                              size: 20,
+                            ),
+                          ),
                           title: Text(
-                            studentName,
+                            formattedDate,
                             style: TextStyle(
-                                fontWeight: FontWeight.w600,
-                                fontSize: 18,
-                                color: Colors.blue[900]),
+                                color: Colors.blue[900],
+                                fontWeight: FontWeight.w500),
                           ),
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text("Veli: ${student['parentName']}",
-                                  style: TextStyle(color: Colors.blue[700])),
                               Text(
-                                "Branş: ${student['branches']?.join(', ') ?? 'Branş yok'}",
+                                "Durum: ${getStatusText(entry['status'])}",
+                                style: TextStyle(color: Colors.blue[700]),
+                              ),
+                              Text(
+                                "Ders: ${entry['lessonBranch']}",
                                 style: TextStyle(color: Colors.blue[600]),
                               ),
                             ],
                           ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: Icon(
-                                  isExpanded
-                                      ? Icons.keyboard_arrow_up
-                                      : Icons.keyboard_arrow_down,
-                                  color: Colors.blue[700],
-                                  size: 28,
+                          trailing: entry['status'] != 'var'
+                              ? ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange[50],
+                              foregroundColor: Colors.orange[800],
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            onPressed: () {
+                              showDialog(
+                                context: context,
+                                builder: (context) => AddMakeupEventDialog(
+                                  onSave: (date, event) { /*...*/ },
+                                  initialTeacherId: entry['teacherId'],
+                                  initialTeacherName: entry['teacherName'],
+                                  initialStudentId: entry['studentId'],
+                                  initialStudentName: selectedStudentId!,
                                 ),
-                                onPressed: () {
-                                  setState(() {
-                                    expandedMap[studentName] = !isExpanded;
-                                  });
-                                },
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      if (isExpanded)
-                        FutureBuilder<List<Map<String, dynamic>>>(
-                          future: getStudentAbsences(studentName),
-                          builder: (context, snapshot) {
-                            if (snapshot.connectionState == ConnectionState.waiting) {
-                              return const Padding(
-                                padding: EdgeInsets.all(8),
-                                child: LinearProgressIndicator(),
                               );
-                            }
-
-                            final absences = snapshot.data ?? [];
-
-                            if (absences.isEmpty) {
-                              return const Padding(
-                                padding: EdgeInsets.all(16),
-                                child: Text("Devamsızlık bilgisi bulunamadı."),
-                              );
-                            }
-
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 16),
-                              child: Column(
-                                children: absences.map((entry) {
-                                  final formattedDate = DateFormat(
-                                      'dd MMMM yyyy', 'tr_TR')
-                                      .format(entry['date']);
-                                  return Container(
-                                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                    child: ListTile(
-                                      dense: true,
-                                      leading: Container(
-                                        padding: const EdgeInsets.all(8),
-                                        decoration: BoxDecoration(
-                                          color: getStatusColor(entry['status']).withOpacity(0.2),
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: Icon(
-                                          getStatusIcon(entry['status']),
-                                          color: getStatusColor(entry['status']),
-                                          size: 20,
-                                        ),
-                                      ),
-                                      title: Text(
-                                        formattedDate,
-                                        style: TextStyle(
-                                            color: Colors.blue[900],
-                                            fontWeight: FontWeight.w500),
-                                      ),
-                                      subtitle: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            "Durum: ${getStatusText(entry['status'])}",
-                                            style: TextStyle(color: Colors.blue[700]),
-                                          ),
-                                          Text(
-                                            "Ders: ${entry['lessonBranch']}",
-                                            style: TextStyle(color: Colors.blue[600]),
-                                          ),
-                                        ],
-                                      ),
-                                      trailing: entry['status'] != 'var'
-                                          ? ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Colors.orange[50],
-                                          foregroundColor: Colors.orange[800],
-                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius: BorderRadius.circular(8),
-                                          ),
-                                        ),
-                                        onPressed: () async {
-                                          // Get teacher info for this lesson
-                                          final lessonQuery = await FirebaseFirestore.instance
-                                              .collection('lessons')
-                                              .where('studentName', isEqualTo: studentName)
-                                              .where('branch', isEqualTo: entry['lessonBranch'])
-                                              .limit(1)
-                                              .get();
-
-                                          if (lessonQuery.docs.isNotEmpty) {
-                                            final lessonData = lessonQuery.docs.first.data();
-                                            final teacherId = lessonData['teacherId'];
-                                            final teacherName = lessonData['teacherName'];
-
-                                            showDialog(
-                                              context: context,
-                                              builder: (context) => AddMakeupEventDialog(
-                                                onSave: (date, event) {
-                                                  // Optional: You can add any post-save logic here
-                                                },
-                                                initialTeacherId: teacherId,
-                                                initialTeacherName: teacherName,
-                                                initialStudentId: student['parentId'], // parentId is used as studentId in your structure
-                                                initialStudentName: studentName,
-                                              ),
-                                            );
-                                          }
-                                        },
-                                        child: const Text('Telafi Oluştur'),
-                                      )
-                                          : null,
-                                    ),
-                                  );
-                                }).toList(),
-                              ),
-                            );
-                          },
+                            },
+                            child: const Text('Telafi Oluştur'),
+                          )
+                              : null,
                         ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          );
-        },
+                      );
+                    }).toList(),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  // Yardımcı fonksiyonlar
+  // Helper functions
   Color getStatusColor(String status) {
     switch (status) {
       case 'var':

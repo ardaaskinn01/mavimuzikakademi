@@ -585,7 +585,10 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
   String? selectedTime;
   String? selectedStudentId;
   String? selectedStudentName;
+  String? selectedBranch;
+  List<String> availableBranches = [];
   List<Map<String, dynamic>> filteredStudents = [];
+  List<DocumentSnapshot> teachers = []; // öğretmenler state’te
 
   @override
   void initState() {
@@ -601,10 +604,13 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
 
   Future<void> _loadStudentsForTeacher(String teacherId) async {
     final firestore = FirebaseFirestore.instance;
-    final teacherDoc = await firestore.collection('users').doc(teacherId).get();
-    final List<String> teacherBranches = List<String>.from(teacherDoc['branches'] ?? []);
+    final teacherDoc =
+    await firestore.collection('users').doc(teacherId).get();
+    final List<String> teacherBranches =
+    List<String>.from(teacherDoc['branches'] ?? []);
 
-    final parentSnapshot = await firestore.collection('users').where('role', isEqualTo: 'parent').get();
+    final parentSnapshot =
+    await firestore.collection('users').where('role', isEqualTo: 'parent').get();
 
     List<Map<String, dynamic>> matchingStudents = [];
 
@@ -619,6 +625,7 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
           matchingStudents.add({
             'parentId': parentId,
             'name': student['name'],
+            'branches': studentBranches, // eklendi
           });
         }
       }
@@ -635,7 +642,8 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
     final timeSlots = List.generate(48, (i) {
       final hour = i ~/ 2;
       final minute = (i % 2) * 30;
-      final formatted = '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
+      final formatted =
+          '${hour.toString().padLeft(2, '0')}:${minute.toString().padLeft(2, '0')}';
       return {'label': formatted, 'hour': hour, 'minute': minute};
     });
 
@@ -644,9 +652,12 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
       content: SingleChildScrollView(
         child: Column(
           children: [
-            // Eğitmen Seçimi - En üstte
+            // Eğitmen Seçimi
             FutureBuilder<QuerySnapshot>(
-              future: firestore.collection('users').where('role', isEqualTo: 'teacher').get(),
+              future: firestore
+                  .collection('users')
+                  .where('role', isEqualTo: 'teacher')
+                  .get(),
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting) {
                   return const CircularProgressIndicator();
@@ -654,7 +665,7 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                 if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
                   return const Text('Eğitmen bulunamadı.');
                 }
-                final teachers = snapshot.data!.docs;
+                teachers = snapshot.data!.docs;
 
                 return DropdownButtonFormField<String>(
                   decoration: const InputDecoration(labelText: 'Eğitmen Seç'),
@@ -668,12 +679,13 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                   onChanged: (val) async {
                     setState(() {
                       selectedTeacherId = val;
-                      // Eğitmen değişince tarih ve saati sıfırla
                       selectedDate = null;
                       selectedTime = null;
                       filteredStudents = [];
                       selectedStudentId = null;
                       selectedStudentName = null;
+                      availableBranches = [];
+                      selectedBranch = null;
                     });
                     if (val != null) {
                       await _loadStudentsForTeacher(val);
@@ -685,16 +697,16 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
 
             const SizedBox(height: 10),
 
-            // Tarih seçici - Eğitmen seçili değilse pasif
+            // Tarih Seçimi
             TextFormField(
               readOnly: true,
               enabled: selectedTeacherId != null,
-              decoration: InputDecoration(
+              decoration: const InputDecoration(
                 labelText: 'Tarih Seç',
-                suffixIcon: const Icon(Icons.calendar_today),
-                enabled: selectedTeacherId != null, // Ek kontrol
+                suffixIcon: Icon(Icons.calendar_today),
               ),
-              onTap: selectedTeacherId != null ? () async {
+              onTap: selectedTeacherId != null
+                  ? () async {
                 final now = DateTime.now();
                 final picked = await showDatePicker(
                   context: context,
@@ -706,21 +718,27 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                 if (picked != null) {
                   setState(() {
                     selectedDate = picked;
-                    selectedTime = null; // Tarih değişince saati sıfırla
+                    selectedTime = null;
                   });
                 }
-              } : null,
+              }
+                  : null,
               controller: TextEditingController(
-                text: selectedDate != null ? DateFormat('dd.MM.yyyy').format(selectedDate!) : '',
+                text: selectedDate != null
+                    ? DateFormat('dd.MM.yyyy').format(selectedDate!)
+                    : '',
               ),
             ),
 
             const SizedBox(height: 10),
 
-            // Saat seçimi - Eğitmen ve tarih seçili değilse pasif ve çakışma kontrolü
+            // Saat Seçimi
             FutureBuilder<QuerySnapshot>(
               future: (selectedTeacherId != null && selectedDate != null)
-                  ? firestore.collection('lessons').where('teacherId', isEqualTo: selectedTeacherId).get()
+                  ? firestore
+                  .collection('lessons')
+                  .where('teacherId', isEqualTo: selectedTeacherId)
+                  .get()
                   : null,
               builder: (context, snapshot) {
                 if (selectedTeacherId == null || selectedDate == null) {
@@ -740,7 +758,9 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                     .where((doc) {
                   final data = doc.data() as Map<String, dynamic>;
                   final lessonDate = (data['date'] as Timestamp).toDate();
-                  return lessonDate.weekday == selectedDate!.weekday;
+                  return lessonDate.year == selectedDate!.year &&
+                      lessonDate.month == selectedDate!.month &&
+                      lessonDate.day == selectedDate!.day;
                 })
                     .map((doc) => (doc['time'] as String))
                     .toSet();
@@ -771,13 +791,10 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
 
             const SizedBox(height: 10),
 
-            // Öğrenci seçimi
+            // Öğrenci Seçimi
             if (filteredStudents.isNotEmpty)
               DropdownButtonFormField<String>(
-                decoration: InputDecoration(
-                  labelText: 'Öğrenci Seç',
-                  enabled: selectedTeacherId != null,
-                ),
+                decoration: const InputDecoration(labelText: 'Öğrenci Seç'),
                 value: selectedStudentId != null && selectedStudentName != null
                     ? "${selectedStudentId}_$selectedStudentName"
                     : null,
@@ -789,13 +806,46 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                   );
                 }).toList(),
                 onChanged: (val) {
-                  setState(() {
+                  if (val != null) {
                     final selected = filteredStudents.firstWhere(
-                          (s) => "${s['parentId']}_${s['name']}" == val,
-                    );
-                    selectedStudentId = selected['parentId'];
-                    selectedStudentName = selected['name'];
-                  });
+                            (s) => "${s['parentId']}_${s['name']}" == val);
+
+                    setState(() {
+                      selectedStudentId = selected['parentId'];
+                      selectedStudentName = selected['name'];
+
+                      // Ortak branşları bul
+                      final teacherDoc = teachers
+                          .firstWhere((t) => t.id == selectedTeacherId);
+                      final teacherBranches =
+                      List<String>.from(teacherDoc['branches'] ?? []);
+                      final studentBranches =
+                      List<String>.from(selected['branches'] ?? []);
+                      availableBranches = teacherBranches
+                          .where((b) => studentBranches.contains(b))
+                          .toList();
+
+                      selectedBranch = null;
+                    });
+                  }
+                },
+              ),
+
+            const SizedBox(height: 10),
+
+            // Branş Seçimi
+            if (availableBranches.isNotEmpty)
+              DropdownButtonFormField<String>(
+                decoration: const InputDecoration(labelText: 'Branş Seç'),
+                value: selectedBranch,
+                items: availableBranches.map((branch) {
+                  return DropdownMenuItem(
+                    value: branch,
+                    child: Text(branch),
+                  );
+                }).toList(),
+                onChanged: (val) {
+                  setState(() => selectedBranch = val);
                 },
               ),
           ],
@@ -810,20 +860,13 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
             if (selectedTeacherId != null &&
                 selectedTime != null &&
                 selectedStudentId != null &&
-                selectedDate != null) {
-              final teacherDoc = await firestore.collection('users').doc(selectedTeacherId).get();
+                selectedDate != null &&
+                selectedBranch != null) {
+              final teacherDoc = await firestore
+                  .collection('users')
+                  .doc(selectedTeacherId)
+                  .get();
               final teacherName = teacherDoc['name'];
-              final List<dynamic> branches = teacherDoc['branches'] ?? [];
-              final branch = branches.isNotEmpty ? branches[0] : null;
-
-              if (branch == null) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Eğitmenin tanımlı bir branşı yok'),
-                  ),
-                );
-                return;
-              }
 
               final newDocRef = firestore.collection('lessons').doc();
               final event = {
@@ -832,7 +875,7 @@ class _AddMakeupEventDialogState extends State<AddMakeupEventDialog> {
                 'time': selectedTime,
                 'teacherId': selectedTeacherId,
                 'teacherName': teacherName,
-                'branch': branch,
+                'branch': selectedBranch, // seçilen branş kaydediliyor
                 'studentId': selectedStudentId,
                 'studentName': selectedStudentName,
                 'recurring': false,

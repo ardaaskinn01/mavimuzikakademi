@@ -30,9 +30,33 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
   @override
   void initState() {
     super.initState();
+    addBranchesToFirestore();
     _loadUnseenNotifications();
     print(widget.role);
   }
+
+  final List<String> branches = [
+    'Gitar', 'Piyano', 'Yan flüt', 'Keman', 'Ney', 'Bağlama',
+    'Müzikli drama', 'Solfej', 'Ukulele', 'Viyolonsel', 'Resim',
+  ];
+
+  Future<void> addBranchesToFirestore() async {
+    final CollectionReference branchesRef =
+    FirebaseFirestore.instance.collection('branches');
+
+    // Firestore'daki mevcut şubeleri al
+    final snapshot = await branchesRef.get();
+    final existingBranches =
+    snapshot.docs.map((doc) => doc['name'] as String).toList();
+
+    for (String branch in branches) {
+      // Eğer Firestore'da yoksa ekle
+      if (!existingBranches.contains(branch)) {
+        await branchesRef.add({'name': branch});
+      }
+    }
+  }
+
 
   void _onAddUser() {
     final nameController = TextEditingController();
@@ -44,10 +68,7 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
     String selectedRole = 'teacher';
     List<String> selectedBranches = [];
 
-    final List<String> branches = [
-      'Gitar', 'Piyano', 'Yan flüt', 'Keman', 'Ney', 'Bağlama',
-      'Müzikli drama', 'Solfej', 'Ukulele', 'Viyolonsel', 'Diğer',
-    ];
+
 
     final List<String> kaynaklar = [
       "Alfred’s Basic Piano Library",
@@ -110,27 +131,83 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
 
                   const SizedBox(height: 12),
 
-                  if (selectedRole == 'teacher') ...[
-                    Wrap(
-                      spacing: 6,
-                      children: branches.map((branch) {
-                        final selected = selectedBranches.contains(branch);
-                        return FilterChip(
-                          label: Text(branch),
-                          selected: selected,
-                          onSelected: (val) {
-                            setState(() {
-                              if (val) {
-                                selectedBranches.add(branch);
-                              } else {
-                                selectedBranches.remove(branch);
-                              }
-                            });
-                          },
+                  // 🔹 Eğitmen için Firestore’dan branş listesi
+                  if (selectedRole == 'teacher')
+                    FutureBuilder<QuerySnapshot>(
+                      future: FirebaseFirestore.instance.collection('branches').get(),
+                      builder: (context, snapshot) {
+                        if (!snapshot.hasData) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+
+                        final branches = snapshot.data!.docs.map((d) => d['name'] as String).toList();
+
+                        return Wrap(
+                          spacing: 6,
+                          children: [
+                            ...branches.map((branch) {
+                              final selected = selectedBranches.contains(branch);
+                              return FilterChip(
+                                label: Text(branch),
+                                selected: selected,
+                                onSelected: (val) {
+                                  setState(() {
+                                    if (val) {
+                                      selectedBranches.add(branch);
+                                    } else {
+                                      selectedBranches.remove(branch);
+                                    }
+                                  });
+                                },
+                              );
+                            }).toList(),
+
+                            // 🔹 Yeni branş ekleme butonu
+                            ActionChip(
+                              avatar: const Icon(Icons.add, color: Colors.white, size: 18),
+                              label: const Text("Yeni Branş"),
+                              backgroundColor: Colors.green,
+                              labelStyle: const TextStyle(color: Colors.white),
+                              onPressed: () async {
+                                final newBranchController = TextEditingController();
+                                final result = await showDialog<String>(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    title: const Text("Yeni Branş Ekle"),
+                                    content: TextField(
+                                      controller: newBranchController,
+                                      decoration: const InputDecoration(hintText: "Branş adı"),
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(context),
+                                        child: const Text("İptal"),
+                                      ),
+                                      ElevatedButton(
+                                        onPressed: () {
+                                          final text = newBranchController.text.trim();
+                                          if (text.isNotEmpty) {
+                                            Navigator.pop(context, text);
+                                          }
+                                        },
+                                        child: const Text("Ekle"),
+                                      ),
+                                    ],
+                                  ),
+                                );
+
+                                if (result != null && result.isNotEmpty) {
+                                  await FirebaseFirestore.instance.collection('branches').add({
+                                    'name': result,
+                                  });
+                                  setState(() {}); // Listeyi güncellemek için yeniden çiz
+                                }
+                              },
+                            ),
+                          ],
                         );
-                      }).toList(),
+                      },
                     ),
-                  ],
 
                   if (selectedRole == 'parent') ...[
                     const SizedBox(height: 10),
@@ -151,7 +228,7 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
                             'name': TextEditingController(),
                             'age': TextEditingController(),
                             'branches': <String>[],
-                            'methods': <String>[], // 👈 EKLENDİ
+                            'methods': <String>[],
                           });
                         });
                       },
@@ -170,49 +247,88 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
                         keyboardType: TextInputType.number,
                         decoration: const InputDecoration(labelText: "Yaş"),
                       ),
-                      const Align(
-                        alignment: Alignment.centerLeft,
-                        child: Padding(
-                          padding: EdgeInsets.symmetric(vertical: 8),
-                          child: Text(
-                            "Branşlar",
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                        ),
-                      ),
 
-// BRANŞ SEÇİMİ
-                      Wrap(
-                        spacing: 6,
-                        children: branches.map((branch) {
-                          final selected = students[i]['branches'].contains(branch);
-                          return FilterChip(
-                            label: Text(branch),
-                            selected: selected,
-                            onSelected: (val) {
-                              setState(() {
-                                if (val) {
-                                  students[i]['branches'].add(branch);
-                                } else {
-                                  students[i]['branches'].remove(branch);
-                                }
-                              });
-                            },
+                      // 🔹 Öğrencinin branş seçimi Firestore’dan
+                      FutureBuilder<QuerySnapshot>(
+                        future: FirebaseFirestore.instance.collection('branches').get(),
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) return const SizedBox.shrink();
+
+                          final branches = snapshot.data!.docs.map((d) => d['name'] as String).toList();
+
+                          return Wrap(
+                            spacing: 6,
+                            children: [
+                              ...branches.map((branch) {
+                                final selected = students[i]['branches'].contains(branch);
+                                return FilterChip(
+                                  label: Text(branch),
+                                  selected: selected,
+                                  onSelected: (val) {
+                                    setState(() {
+                                      if (val) {
+                                        students[i]['branches'].add(branch);
+                                      } else {
+                                        students[i]['branches'].remove(branch);
+                                      }
+                                    });
+                                  },
+                                );
+                              }).toList(),
+
+                              ActionChip(
+                                avatar: const Icon(Icons.add, color: Colors.white, size: 18),
+                                label: const Text("Yeni Branş"),
+                                backgroundColor: Colors.green,
+                                labelStyle: const TextStyle(color: Colors.white),
+                                onPressed: () async {
+                                  final newBranchController = TextEditingController();
+                                  final result = await showDialog<String>(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                      title: const Text("Yeni Branş Ekle"),
+                                      content: TextField(
+                                        controller: newBranchController,
+                                        decoration: const InputDecoration(hintText: "Branş adı"),
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(context),
+                                          child: const Text("İptal"),
+                                        ),
+                                        ElevatedButton(
+                                          onPressed: () {
+                                            final text = newBranchController.text.trim();
+                                            if (text.isNotEmpty) {
+                                              Navigator.pop(context, text);
+                                            }
+                                          },
+                                          child: const Text("Ekle"),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+
+                                  if (result != null && result.isNotEmpty) {
+                                    await FirebaseFirestore.instance.collection('branches').add({
+                                      'name': result,
+                                    });
+                                    setState(() {});
+                                  }
+                                },
+                              ),
+                            ],
                           );
-                        }).toList(),
+                        },
                       ),
 
-// METODLAR BAŞLIĞI
-                      // METODLAR SADECE PİYANO SEÇİLİYSE GÖRÜNÜR
+                      // Eğer öğrenci Piyano seçerse metodlar
                       if (students[i]['branches'].contains('Piyano')) ...[
                         const Align(
                           alignment: Alignment.centerLeft,
                           child: Padding(
                             padding: EdgeInsets.only(top: 12, bottom: 8),
-                            child: Text(
-                              "Kullanılan Metodlar",
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
+                            child: Text("Kullanılan Metodlar", style: TextStyle(fontWeight: FontWeight.bold)),
                           ),
                         ),
                         Wrap(
@@ -235,10 +351,8 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
                           }).toList(),
                         ),
                       ],
-
-                      const SizedBox(height: 10),
                     ],
-                  ]
+                  ],
                 ],
               ),
             ),
@@ -279,14 +393,14 @@ class _CustomBottomNavState extends State<CustomBottomNav> {
                     };
 
                     if (selectedRole == 'teacher') {
-                      userDoc['branches'] = selectedBranches; // ✅ Burası doğru
+                      userDoc['branches'] = selectedBranches;
                     } else if (selectedRole == 'parent') {
                       userDoc['phone'] = phoneController.text.trim();
                       userDoc['students'] = students.map((s) => {
                         'name': s['name'].text.trim(),
                         'age': s['age'].text.trim(),
-                        'branches': s['branches'], // ✅ Bu da List<String>, doğru
-                        'methods': s['methods'], // ✅ Bu da List<String>, doğru
+                        'branches': s['branches'],
+                        'methods': s['methods'],
                       }).toList();
                     }
 

@@ -11,16 +11,18 @@ import 'package:file_picker/file_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
-import 'audio.dart';
+import 'audio.dart'; // Bu dosyanın mevcut olduğunu varsayıyoruz.
 
 class ChatScreen extends StatefulWidget {
   final String receiverId;
   final bool isReadOnly;
+  final List<String>? chatParticipants; // 👈 supervisor için opsiyonel
 
   const ChatScreen({
     super.key,
     required this.receiverId,
     this.isReadOnly = false,
+    this.chatParticipants, // 👈
   });
 
   @override
@@ -74,6 +76,27 @@ class _ChatScreenState extends State<ChatScreen> {
     return result;
   }
 
+  Stream<QuerySnapshot> _buildMessageStream() {
+    final base = FirebaseFirestore.instance.collection('messages');
+
+    String chatId;
+
+    if (widget.isReadOnly && widget.chatParticipants != null && widget.chatParticipants!.length == 2) {
+      // Supervisor modu, chatParticipants listesini kullan
+      final user1 = widget.chatParticipants![0];
+      final user2 = widget.chatParticipants![1];
+      chatId = getChatId(user1, user2);
+    } else {
+      // Normal kullanıcı modu, kendi UID'sini ve receiverId'yi kullan
+      chatId = getChatId(_user!.uid, widget.receiverId);
+    }
+
+    return base
+        .where('chatId', isEqualTo: chatId)
+        .orderBy('timestamp', descending: true)
+        .snapshots();
+  }
+
   void sendMessage(String text, {bool isFile = false}) async {
     if (widget.isReadOnly || text.trim().isEmpty) return;
 
@@ -106,11 +129,9 @@ class _ChatScreenState extends State<ChatScreen> {
           lower.endsWith('.mov') ||
           lower.endsWith('.webm')) {
         previewText = '🎥 Video';
-      }
-      else if (isAudio(lower)) {
+      } else if (isAudio(lower)) {
         previewText = '🎤 Ses';
-      }
-      else {
+      } else {
         previewText = '📎 Belge';
       }
     }
@@ -137,14 +158,17 @@ class _ChatScreenState extends State<ChatScreen> {
     if (widget.isReadOnly) return;
 
     if (Platform.isAndroid) {
-      final androidVersion = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
+      final androidVersion =
+          (await DeviceInfoPlugin().androidInfo).version.sdkInt;
 
       if (androidVersion < 29) {
         // Android 9 ve öncesi: storage izni gerekli
         final status = await Permission.storage.request();
         if (!status.isGranted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("Dosya göndermek için depolama izni gerekli.")),
+            const SnackBar(
+              content: Text("Dosya göndermek için depolama izni gerekli."),
+            ),
           );
           return;
         }
@@ -197,9 +221,9 @@ class _ChatScreenState extends State<ChatScreen> {
     else if (lowerUrl.endsWith('.mp4') ||
         lowerUrl.endsWith('.mov') ||
         lowerUrl.endsWith('.webm')) {
-      Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => VideoPlayerScreen(videoUrl: url),
-      ));
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => VideoPlayerScreen(videoUrl: url)),
+      );
     }
     // Diğer dosyalar → dış uygulama ile aç
     else {
@@ -216,7 +240,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String getChatId(String uid1, String uid2) {
-    return uid1.hashCode <= uid2.hashCode ? "$uid1\_$uid2" : "$uid2\_$uid1";
+    final sorted = [uid1, uid2]..sort();
+    return "${sorted[0]}_${sorted[1]}";
   }
 
   @override
@@ -256,260 +281,223 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           body: Column(
             children: [
+              // --- Mesajlar Listesi ---
               Expanded(
-                child: Container(
-                  child: StreamBuilder<QuerySnapshot>(
-                    stream:
-                        FirebaseFirestore.instance
-                            .collection('messages')
-                            .where(
-                              'senderId',
-                              whereIn: [_user!.uid, widget.receiverId],
-                            )
-                            .orderBy('timestamp', descending: true)
-                            .snapshots(),
-                    builder: (context, snapshot) {
-                      if (!snapshot.hasData) {
-                        return Center(
-                          child: CircularProgressIndicator(
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              Colors.blue[700]!,
-                            ),
+                child: StreamBuilder<QuerySnapshot>(
+                  stream: _buildMessageStream(),
+                  builder: (context, snapshot) {
+                    if (!snapshot.hasData) {
+                      return Center(
+                        child: CircularProgressIndicator(
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Colors.blue[700]!,
                           ),
+                        ),
+                      );
+                    }
+
+                    final docs = snapshot.data!.docs;
+
+                    if (docs.isEmpty) {
+                      return Center(
+                        child: Text(
+                          "Henüz mesaj yok",
+                          style: TextStyle(color: Colors.grey[600]),
+                        ),
+                      );
+                    }
+
+                    return ListView.builder(
+                      reverse: true,
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                      itemCount: docs.length,
+                      itemBuilder: (context, index) {
+                        final msg = docs[index];
+                        final isMe = msg['senderId'] == _user!.uid;
+                        final encryptedText = msg['text'];
+                        final decryptedText = _encrypter.decrypt64(
+                          encryptedText,
+                          iv: _iv,
                         );
-                      }
+                        final isFile = msg['isFile'] == true;
+                        final timestamp = msg['timestamp'] as Timestamp?;
+                        final timeString =
+                            timestamp != null
+                                ? DateFormat('HH:mm').format(timestamp.toDate())
+                                : '';
 
-                      final docs =
-                          snapshot.data!.docs
-                              .where(
-                                (doc) =>
-                                    (doc['senderId'] == _user!.uid &&
-                                        doc['receiverId'] ==
-                                            widget.receiverId) ||
-                                    (doc['senderId'] == widget.receiverId &&
-                                        doc['receiverId'] == _user!.uid),
-                              )
-                              .toList();
-
-                      return ListView.builder(
-                        reverse: true,
-                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                        itemCount: docs.length,
-                        itemBuilder: (context, index) {
-                          final msg = docs[index];
-                          final isMe = msg['senderId'] == _user!.uid;
-                          final encryptedText = msg['text'];
-                          final decryptedText = _encrypter.decrypt64(
-                            encryptedText,
-                            iv: _iv,
-                          );
-                          final isFile = msg['isFile'] == true;
-                          final timestamp = msg['timestamp'] as Timestamp?;
-                          final timeString =
-                              timestamp != null
-                                  ? DateFormat(
-                                    'HH:mm',
-                                  ).format(timestamp.toDate())
-                                  : '';
-
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(vertical: 4),
-                            child: Row(
-                              mainAxisAlignment:
-                                  isMe
-                                      ? MainAxisAlignment.end
-                                      : MainAxisAlignment.start,
-                              children: [
-                                Flexible(
-                                  child: Container(
-                                    constraints: BoxConstraints(
-                                      maxWidth:
-                                          MediaQuery.of(context).size.width *
-                                          0.8,
-                                    ),
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color:
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            mainAxisAlignment:
+                                isMe
+                                    ? MainAxisAlignment.end
+                                    : MainAxisAlignment.start,
+                            children: [
+                              Flexible(
+                                child: Container(
+                                  constraints: BoxConstraints(
+                                    maxWidth:
+                                        MediaQuery.of(context).size.width * 0.8,
+                                  ),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color:
+                                        isMe ? Colors.blue[700] : Colors.white,
+                                    borderRadius: BorderRadius.only(
+                                      topLeft: const Radius.circular(16),
+                                      topRight: const Radius.circular(16),
+                                      bottomLeft:
                                           isMe
-                                              ? Colors.blue[700]
-                                              : Colors.white,
-                                      borderRadius: BorderRadius.only(
-                                        topLeft: const Radius.circular(16),
-                                        topRight: const Radius.circular(16),
-                                        bottomLeft:
-                                            isMe
-                                                ? const Radius.circular(16)
-                                                : Radius.zero,
-                                        bottomRight:
-                                            isMe
-                                                ? Radius.zero
-                                                : const Radius.circular(16),
+                                              ? const Radius.circular(16)
+                                              : Radius.zero,
+                                      bottomRight:
+                                          isMe
+                                              ? Radius.zero
+                                              : const Radius.circular(16),
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.1),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 2),
                                       ),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: Colors.black.withOpacity(0.1),
-                                          blurRadius: 4,
-                                          offset: const Offset(0, 2),
-                                        ),
-                                      ],
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          isMe
-                                              ? CrossAxisAlignment.end
-                                              : CrossAxisAlignment.start,
-                                      children: [
-                                        if (isFile)
-                                          InkWell(
-                                            onTap:
-                                                () => handleFileTap(
-                                                  context,
-                                                  decryptedText,
-                                                ),
-                                            child: Container(
-                                              padding: const EdgeInsets.all(8),
-                                              decoration: BoxDecoration(
+                                    ],
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        isMe
+                                            ? CrossAxisAlignment.end
+                                            : CrossAxisAlignment.start,
+                                    children: [
+                                      if (isFile)
+                                        InkWell(
+                                          onTap:
+                                              () => handleFileTap(
+                                                context,
+                                                decryptedText,
+                                              ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.attach_file,
                                                 color:
                                                     isMe
-                                                        ? Colors.blue[600]
-                                                        : Colors.blue[50],
-                                                borderRadius:
-                                                    BorderRadius.circular(12),
+                                                        ? Colors.white
+                                                        : Colors.blue[700],
                                               ),
-                                              child: Row(
-                                                mainAxisSize: MainAxisSize.min,
-                                                children: [
-                                                  Icon(
-                                                    Icons.attach_file,
-                                                    color:
-                                                        isMe
-                                                            ? Colors.white
-                                                            : Colors.blue[700],
-                                                  ),
-                                                  const SizedBox(width: 8),
-                                                  Flexible(
-                                                    child: Text(
-                                                      "Belge veya Medya",
-                                                      style: TextStyle(
-                                                        color:
-                                                            isMe
-                                                                ? Colors.white
-                                                                : Colors
-                                                                    .blue[800],
-                                                        overflow:
-                                                            TextOverflow
-                                                                .ellipsis,
-                                                      ),
-                                                    ),
-                                                  ),
-                                                ],
+                                              const SizedBox(width: 8),
+                                              Text(
+                                                "Belge veya Medya",
+                                                style: TextStyle(
+                                                  color:
+                                                      isMe
+                                                          ? Colors.white
+                                                          : Colors.blue[800],
+                                                ),
                                               ),
+                                            ],
+                                          ),
+                                        )
+                                      else if (isAudio(decryptedText))
+                                        Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              icon: Icon(
+                                                _currentlyPlayingUrl ==
+                                                        decryptedText
+                                                    ? Icons.stop
+                                                    : Icons.play_arrow,
+                                                color:
+                                                    isMe
+                                                        ? Colors.white
+                                                        : Colors.blue[700],
+                                              ),
+                                              onPressed: () async {
+                                                if (_currentlyPlayingUrl ==
+                                                    decryptedText) {
+                                                  await _audioPlayerService
+                                                      .stop();
+                                                  setState(() {
+                                                    _currentlyPlayingUrl = null;
+                                                  });
+                                                } else {
+                                                  await _audioPlayerService
+                                                      .play(decryptedText);
+                                                  setState(() {
+                                                    _currentlyPlayingUrl =
+                                                        decryptedText;
+                                                  });
+                                                }
+                                              },
                                             ),
-                                          )
-                                        else if (isAudio(decryptedText))
-                                          Container(
-                                            padding: const EdgeInsets.all(8),
-                                            decoration: BoxDecoration(
-                                              color: isMe ? Colors.blue[600] : Colors.blue[50],
-                                              borderRadius: BorderRadius.circular(12),
-                                            ),
-                                            child: Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                IconButton(
-                                                  icon: Icon(
-                                                    _currentlyPlayingUrl == decryptedText
-                                                        ? Icons.stop
-                                                        : Icons.play_arrow,
-                                                    color: isMe ? Colors.white : Colors.blue[700],
-                                                  ),
-                                                  onPressed: () async {
-                                                    if (_currentlyPlayingUrl == decryptedText) {
-                                                      await _audioPlayerService.stop();
-                                                      setState(() {
-                                                        _currentlyPlayingUrl = null;
-                                                      });
-                                                    } else {
-                                                      await _audioPlayerService.play(decryptedText);
-                                                      setState(() {
-                                                        _currentlyPlayingUrl = decryptedText;
-                                                      });
-                                                    }
-                                                  },
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Text(
-                                                  'Ses Mesajı',
-                                                  style: TextStyle(
-                                                    color: isMe ? Colors.white : Colors.blue[800],
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                Text(
-                                                  timeString,
-                                                  style: TextStyle(
-                                                    fontSize: 10,
-                                                    color: isMe ? Colors.white70 : Colors.blue[600],
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          )
-                                        else if (isUrl(decryptedText))
-                                          InkWell(
-                                            onTap:
-                                                () => launchCustomUrl(
-                                                  context,
-                                                  decryptedText,
-                                                ),
-                                            child: Text(
-                                              decryptedText,
+                                            Text(
+                                              "Ses Mesajı",
                                               style: TextStyle(
                                                 color:
                                                     isMe
                                                         ? Colors.white
-                                                        : Colors.blue,
-                                                decoration:
-                                                    TextDecoration.underline,
+                                                        : Colors.blue[800],
                                               ),
                                             ),
-                                          )
-                                        else
-                                          Text(
+                                          ],
+                                        )
+                                      else if (isUrl(decryptedText))
+                                        InkWell(
+                                          onTap:
+                                              () => launchCustomUrl(
+                                                context,
+                                                decryptedText,
+                                              ),
+                                          child: Text(
                                             decryptedText,
                                             style: TextStyle(
                                               color:
                                                   isMe
                                                       ? Colors.white
-                                                      : Colors.blue[900],
+                                                      : Colors.blue[700],
+                                              decoration:
+                                                  TextDecoration.underline,
                                             ),
                                           ),
-                                        const SizedBox(height: 4),
+                                        )
+                                      else
                                         Text(
-                                          timeString,
+                                          decryptedText,
                                           style: TextStyle(
-                                            fontSize: 10,
                                             color:
                                                 isMe
-                                                    ? Colors.white70
-                                                    : Colors.blue[600],
+                                                    ? Colors.white
+                                                    : Colors.blue[900],
                                           ),
                                         ),
-                                      ],
-                                    ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        timeString,
+                                        style: TextStyle(
+                                          fontSize: 10,
+                                          color:
+                                              isMe
+                                                  ? Colors.white70
+                                                  : Colors.blue[600],
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ),
-                              ],
-                            ),
-                          );
-                        },
-                      );
-                    },
-                  ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    );
+                  },
                 ),
               ),
 
-              // Mesaj Giriş Alanı
+              // --- Mesaj Giriş Alanı (sadece isReadOnly == false ise) ---
               if (!widget.isReadOnly)
                 Container(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
@@ -520,7 +508,33 @@ class _ChatScreenState extends State<ChatScreen> {
                         icon: Icon(Icons.attach_file, color: Colors.blue[700]),
                         onPressed: pickAndSendFile,
                       ),
-                      // In the IconButton for microphone in the ChatScreen build method:
+                      Expanded(
+                        child: TextField(
+                          controller: _controller,
+                          focusNode: _focusNode,
+                          decoration: InputDecoration(
+                            hintText: "Mesaj gönder...",
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(24),
+                              borderSide: BorderSide.none,
+                            ),
+                            filled: true,
+                            fillColor: Colors.blue[50],
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 8,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.send, color: Colors.white),
+                        onPressed: () => sendMessage(_controller.text),
+                        style: IconButton.styleFrom(
+                          backgroundColor: Colors.blue[700],
+                        ),
+                      ),
                       IconButton(
                         icon: Icon(_isRecording ? Icons.stop : Icons.mic),
                         color: Colors.blueAccent,
@@ -533,81 +547,41 @@ class _ChatScreenState extends State<ChatScreen> {
                           } else {
                             final shouldSend = await showDialog<bool>(
                               context: context,
-                              builder: (context) => AlertDialog(
-                                title: const Text('Ses Kaydı'),
-                                content: const Text('Ses kaydını göndermek istiyor musunuz?'),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context, false),
-                                    child: const Text('İptal'),
+                              builder:
+                                  (context) => AlertDialog(
+                                    title: const Text('Ses Kaydı'),
+                                    content: const Text(
+                                      'Ses kaydını göndermek istiyor musunuz?',
+                                    ),
+                                    actions: [
+                                      TextButton(
+                                        onPressed:
+                                            () => Navigator.pop(context, false),
+                                        child: const Text('İptal'),
+                                      ),
+                                      TextButton(
+                                        onPressed:
+                                            () => Navigator.pop(context, true),
+                                        child: const Text('Gönder'),
+                                      ),
+                                    ],
                                   ),
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(context, true),
-                                    child: const Text('Gönder'),
-                                  ),
-                                ],
-                              ),
                             );
 
-                            if (shouldSend ?? false) {
-                              final path = await _audioService.stopRecording();
-                              if (path != null) {
-                                final file = File(path);
-                                final fileName = path.split('/').last;
-
-                                final senderId = _user!.uid;
-                                final receiverId = widget.receiverId;
-
-                                final subPath = "mesajlar/${senderId}_to_${receiverId}/$fileName";
-
-                                await Supabase.instance.client.storage
-                                    .from('kuyumcu')
-                                    .upload(subPath, file);
-
-                                final publicUrl = Supabase.instance.client.storage
-                                    .from('kuyumcu')
-                                    .getPublicUrl(subPath);
-
-                                sendMessage(publicUrl, isFile: false);
+                            if (shouldSend == true) {
+                              final audioUrl =
+                                  await _audioService.stopRecording();
+                              if (audioUrl != null) {
+                                sendMessage(audioUrl, isFile: true);
                               }
                             } else {
                               await _audioService.stopRecording();
                             }
-
                             setState(() {
                               _isRecording = false;
                             });
                           }
                         },
-                      ),
-                      Expanded(
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          decoration: BoxDecoration(
-                            color: Colors.blue[50],
-                            borderRadius: BorderRadius.circular(24),
-                          ),
-                          child: CustomOverlayAutocomplete(
-                            options: kaynaklar,
-                            controller: _controller,
-                            focusNode: _focusNode,
-                            onSelected: (value) {
-                              // Opsiyonel: anında mesajı gönder vs.
-                              _controller.text = value;
-                            },
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.blue[700],
-                          shape: BoxShape.circle,
-                        ),
-                        child: IconButton(
-                          icon: const Icon(Icons.send, color: Colors.white),
-                          onPressed: () => sendMessage(_controller.text),
-                        ),
                       ),
                     ],
                   ),
@@ -618,11 +592,18 @@ class _ChatScreenState extends State<ChatScreen> {
       },
     );
   }
+}
 
-  void launchCustomUrl(BuildContext context, String url) async {
-    final uri = Uri.parse(url);
-
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+// FullscreenImageViewer ve VideoPlayerScreen gibi yardımcı widget'ların burada tanımlı olduğunu varsayıyoruz.
+// launchCustomUrl fonksiyonu da muhtemelen url_launcher kullanıyordur.
+void launchCustomUrl(BuildContext context, String url) async {
+  final uri = Uri.parse(url);
+  if (await canLaunchUrl(uri)) {
+    await launchUrl(uri);
+  } else {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('URL açılamıyor')));
   }
 }
 
@@ -657,7 +638,8 @@ class CustomOverlayAutocomplete extends StatefulWidget {
   });
 
   @override
-  State<CustomOverlayAutocomplete> createState() => _CustomOverlayAutocompleteState();
+  State<CustomOverlayAutocomplete> createState() =>
+      _CustomOverlayAutocompleteState();
 }
 
 class _CustomOverlayAutocompleteState extends State<CustomOverlayAutocomplete> {
@@ -693,46 +675,52 @@ class _CustomOverlayAutocompleteState extends State<CustomOverlayAutocomplete> {
     final keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
 
     const overlayHeight = 200.0;
-    final spaceBelow = screenHeight - position.dy - size.height - keyboardHeight;
+    final spaceBelow =
+        screenHeight - position.dy - size.height - keyboardHeight;
     final spaceAbove = position.dy;
 
     // Tercihe göre yukarı ya da aşağı göster
     final showAbove = spaceBelow < overlayHeight && spaceAbove > overlayHeight;
 
-    final top = showAbove
-        ? position.dy - overlayHeight
-        : position.dy - overlayHeight + 40;
+    final top =
+        showAbove
+            ? position.dy - overlayHeight
+            : position.dy - overlayHeight + 40;
 
     return OverlayEntry(
-      builder: (context) => Positioned(
-        left: position.dx,
-        top: top,
-        width: size.width,
-        child: Material(
-          elevation: 4,
-          borderRadius: BorderRadius.circular(8),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: overlayHeight),
-            child: ListView(
-              padding: EdgeInsets.zero,
-              shrinkWrap: true,
-              children: _filteredOptions.map((option) {
-                return ListTile(
-                  title: Text(option),
-                  onTap: () {
-                    widget.onSelected(option);
-                    widget.controller.text = option;
-                    widget.controller.selection = TextSelection.fromPosition(
-                      TextPosition(offset: option.length),
-                    );
-                    _closeOverlay();
-                  },
-                );
-              }).toList(),
+      builder:
+          (context) => Positioned(
+            left: position.dx,
+            top: top,
+            width: size.width,
+            child: Material(
+              elevation: 4,
+              borderRadius: BorderRadius.circular(8),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: overlayHeight),
+                child: ListView(
+                  padding: EdgeInsets.zero,
+                  shrinkWrap: true,
+                  children:
+                      _filteredOptions.map((option) {
+                        return ListTile(
+                          title: Text(option),
+                          onTap: () {
+                            widget.onSelected(option);
+                            widget.controller.text = option;
+                            widget
+                                .controller
+                                .selection = TextSelection.fromPosition(
+                              TextPosition(offset: option.length),
+                            );
+                            _closeOverlay();
+                          },
+                        );
+                      }).toList(),
+                ),
+              ),
             ),
           ),
-        ),
-      ),
     );
   }
 
@@ -780,10 +768,10 @@ class _CustomOverlayAutocompleteState extends State<CustomOverlayAutocomplete> {
 class VideoPlayerScreen extends StatefulWidget {
   final String videoUrl;
 
-  const VideoPlayerScreen({required this.videoUrl, super.key});
+  const VideoPlayerScreen({super.key, required this.videoUrl});
 
   @override
-  State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
+  _VideoPlayerScreenState createState() => _VideoPlayerScreenState();
 }
 
 class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
@@ -793,8 +781,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   @override
   void initState() {
     super.initState();
-
-    _controller = VideoPlayerController.network(widget.videoUrl)
+    _controller = VideoPlayerController.networkUrl(Uri.parse(widget.videoUrl))
       ..initialize().then((_) {
         setState(() {
           _initialized = true;
@@ -815,37 +802,40 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       appBar: AppBar(title: const Text('Video Oynatıcı')),
       backgroundColor: Colors.black,
       body: Center(
-        child: _initialized
-            ? AspectRatio(
-          aspectRatio: _controller.value.aspectRatio,
-          child: Stack(
-            alignment: Alignment.bottomCenter,
-            children: [
-              VideoPlayer(_controller),
-              VideoProgressIndicator(_controller, allowScrubbing: true),
-              Positioned(
-                bottom: 20,
-                right: 20,
-                child: FloatingActionButton(
-                  mini: true,
-                  backgroundColor: Colors.black54,
-                  onPressed: () {
-                    setState(() {
-                      _controller.value.isPlaying
-                          ? _controller.pause()
-                          : _controller.play();
-                    });
-                  },
-                  child: Icon(
-                    _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                    color: Colors.grey[300],
+        child:
+            _initialized
+                ? AspectRatio(
+                  aspectRatio: _controller.value.aspectRatio,
+                  child: Stack(
+                    alignment: Alignment.bottomCenter,
+                    children: [
+                      VideoPlayer(_controller),
+                      VideoProgressIndicator(_controller, allowScrubbing: true),
+                      Positioned(
+                        bottom: 20,
+                        right: 20,
+                        child: FloatingActionButton(
+                          mini: true,
+                          backgroundColor: Colors.black54,
+                          onPressed: () {
+                            setState(() {
+                              _controller.value.isPlaying
+                                  ? _controller.pause()
+                                  : _controller.play();
+                            });
+                          },
+                          child: Icon(
+                            _controller.value.isPlaying
+                                ? Icons.pause
+                                : Icons.play_arrow,
+                            color: Colors.grey[300],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ),
-            ],
-          ),
-        )
-            : const CircularProgressIndicator(),
+                )
+                : const CircularProgressIndicator(),
       ),
     );
   }
