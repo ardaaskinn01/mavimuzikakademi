@@ -154,28 +154,47 @@ class _ChatScreenState extends State<ChatScreen> {
         lowerUrl.endsWith('.ogg');
   }
 
+  Future<bool> _isteMedyaDosyaIzni() async {
+    if (Platform.isAndroid) {
+      final androidInfo = await DeviceInfoPlugin().androidInfo;
+      final sdkVersion = androidInfo.version.sdkInt;
+
+      if (sdkVersion >= 33) {
+        // Android 13 (API 33) ve sonrası için daha spesifik izinler
+        final statusImages = await Permission.photos.request();
+        final statusVideos = await Permission.videos.request();
+        // Ek olarak, kullanıcıya belirli görselleri seçme izni için
+        // Permission.photos.request() yeterlidir.
+        return statusImages.isGranted || statusVideos.isGranted;
+      } else if (sdkVersion >= 29) {
+        // Android 10 (API 29) ve sonrası için Scoped Storage geçerli,
+        // FilePicker otomatik olarak çalışır.
+        return true;
+      } else {
+        // Android 9 (API 28) ve öncesi için
+        final status = await Permission.storage.request();
+        return status.isGranted;
+      }
+    }
+    // iOS için her zaman true döndür
+    return true;
+  }
+
+// pickAndSendFile fonksiyonunun güncellenmiş hali
   Future<void> pickAndSendFile() async {
     if (widget.isReadOnly) return;
 
-    if (Platform.isAndroid) {
-      final androidVersion =
-          (await DeviceInfoPlugin().androidInfo).version.sdkInt;
-
-      if (androidVersion < 29) {
-        // Android 9 ve öncesi: storage izni gerekli
-        final status = await Permission.storage.request();
-        if (!status.isGranted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Dosya göndermek için depolama izni gerekli."),
-            ),
-          );
-          return;
-        }
-      }
-      // Android 10+ için ek izin gerekmez
+    final izinVar = await _isteMedyaDosyaIzni();
+    if (!izinVar) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Dosya göndermek için gerekli izinler alınamadı."),
+        ),
+      );
+      return;
     }
 
+    // Mevcut FilePicker kodu bu satırdan sonra devam edebilir
     final result = await FilePicker.platform.pickFiles();
 
     if (result != null && result.files.single.path != null) {

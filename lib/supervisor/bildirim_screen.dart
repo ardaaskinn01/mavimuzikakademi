@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-
 import 'package:intl/intl.dart';
 
 class BildirimScreen extends StatefulWidget {
@@ -16,12 +15,13 @@ class _BildirimScreenState extends State<BildirimScreen> {
   List<Map<String, dynamic>> lessons = [];
   bool isLoading = true;
   final onesignalAppId = "391d3144-b237-4ef9-8a21-35cd09dee163";
-  final onesignalRestApiKey = "os_v2_app_heotcrfsg5hptcrbgxgqtxxbmnwgq6djkl4u5cushs2nsmrozlb4u4glja7lvjrsvr4fgovqod5bpxaeajzppyqixgykzjtpbbsdvny";
+  final onesignalRestApiKey =
+      "os_v2_app_heotcrfsg5hptcrbgxgqtxxbmnwgq6djkl4u5cushs2nsmrozlb4u4glja7lvjrsvr4fgovqod5bpxaeajzppyqixgykzjtpbbsdvny";
 
   @override
   void initState() {
     super.initState();
-    loadLessons(); // Veriyi yükle ve setState ile durumu güncelle
+    loadLessons();
   }
 
   Future<void> loadLessons() async {
@@ -36,7 +36,8 @@ class _BildirimScreenState extends State<BildirimScreen> {
     final now = DateTime.now();
     final next24Hours = now.add(const Duration(hours: 24));
 
-    final snapshot = await FirebaseFirestore.instance.collection('lessons').get();
+    final snapshot =
+    await FirebaseFirestore.instance.collection('lessons').get();
 
     List<Map<String, dynamic>> filteredLessons = [];
 
@@ -45,38 +46,76 @@ class _BildirimScreenState extends State<BildirimScreen> {
 
       DateTime date = (data['date'] as Timestamp).toDate();
       String timeStr = data['time'] ?? "00:00";
+      final bool isRecurring = data['recurring'] ?? false;
 
-      DateTime lessonDateTime;
-
+      DateTime lessonTime;
       try {
-        if (timeStr.toLowerCase().contains("am") || timeStr.toLowerCase().contains("pm")) {
-          lessonDateTime = DateFormat.jm('en_US').parse(timeStr);
+        if (timeStr.toLowerCase().contains("am") ||
+            timeStr.toLowerCase().contains("pm")) {
+          lessonTime = DateFormat.jm('en_US').parse(timeStr);
         } else {
-          lessonDateTime = DateFormat("HH:mm").parse(timeStr);
+          lessonTime = DateFormat("HH:mm").parse(timeStr);
         }
       } catch (e) {
-        lessonDateTime = DateFormat("HH:mm").parse("00:00");
+        lessonTime = DateFormat("HH:mm").parse("00:00");
       }
 
-      final combinedDateTime = DateTime(
-        date.year,
-        date.month,
-        date.day,
-        lessonDateTime.hour,
-        lessonDateTime.minute,
-      );
+      DateTime combinedDateTime;
 
-      // 🔽 24 saat filtresi burada
-      if (combinedDateTime.isAfter(now) && combinedDateTime.isBefore(next24Hours)) {
+      if (isRecurring) {
+        // Tekrar eden dersler için günün bir sonraki örneğini bul
+        int lessonWeekday = date.weekday;
+        int currentWeekday = now.weekday;
+
+        int daysToAdd = (lessonWeekday - currentWeekday + 7) % 7;
+
+        DateTime nextLessonDate = now.add(Duration(days: daysToAdd));
+
+        // Combine date and time
+        combinedDateTime = DateTime(
+          nextLessonDate.year,
+          nextLessonDate.month,
+          nextLessonDate.day,
+          lessonTime.hour,
+          lessonTime.minute,
+        );
+
+        // İptal edilmiş mi kontrolü
+        final List<dynamic> cancelledTimestamps = data['cancelledDates'] ?? [];
+        final bool isCancelledForThisDay = cancelledTimestamps.any((timestamp) {
+          final cancelledDate = (timestamp as Timestamp).toDate();
+          return cancelledDate.year == nextLessonDate.year &&
+              cancelledDate.month == nextLessonDate.month &&
+              cancelledDate.day == nextLessonDate.day;
+        });
+
+        if (isCancelledForThisDay) {
+          continue; // İptal edilmişse bir sonraki derse geç
+        }
+
+      } else {
+        // Tek seferlik dersler için mevcut mantık
+        combinedDateTime = DateTime(
+          date.year,
+          date.month,
+          date.day,
+          lessonTime.hour,
+          lessonTime.minute,
+        );
+      }
+
+      // 24 saat filtresi burada
+      if (combinedDateTime.isAfter(now) &&
+          combinedDateTime.isBefore(next24Hours)) {
         filteredLessons.add({
           'id': doc.id,
           'teacherId': data['teacherId'],
-          'date': date,
+          'date': combinedDateTime, // 🟢 Güncellenmiş tarih eklendi
           'time': timeStr,
           'notified': data['notified'] ?? false,
           'teacherName': data['teacherName'],
           'branch': data['branch'],
-          'studentName': data['studentName'], // 👈 parent aramak için
+          'studentName': data['studentName'],
         });
       }
     }
@@ -85,7 +124,8 @@ class _BildirimScreenState extends State<BildirimScreen> {
   }
 
   Future<void> sendPushNotification(String teacherId, String lessonId) async {
-    final lessonDoc = await FirebaseFirestore.instance
+    final lessonDoc =
+    await FirebaseFirestore.instance
         .collection('lessons')
         .doc(lessonId)
         .get();
@@ -102,7 +142,8 @@ class _BildirimScreenState extends State<BildirimScreen> {
     final message = "Yarın dersiniz var :)";
 
     // 1. Öğretmenin playerId'sini al
-    final teacherDoc = await FirebaseFirestore.instance
+    final teacherDoc =
+    await FirebaseFirestore.instance
         .collection('users')
         .doc(teacherId)
         .get();
@@ -114,7 +155,8 @@ class _BildirimScreenState extends State<BildirimScreen> {
     String? parentPlayerId;
     String? parentId;
 
-    final parentsQuery = await FirebaseFirestore.instance
+    final parentsQuery =
+    await FirebaseFirestore.instance
         .collection('users')
         .where('role', isEqualTo: 'parent')
         .get();
@@ -124,14 +166,15 @@ class _BildirimScreenState extends State<BildirimScreen> {
       final students = parentData['students'] ?? [];
 
       for (var student in students) {
-        if ((student['name'] as String?)?.toLowerCase() == studentName.toLowerCase()) {
+        if ((student['name'] as String?)?.toLowerCase() ==
+            studentName.toLowerCase()) {
           parentPlayerId = parentData['playerId'];
           parentId = parentDoc.id;
           break;
         }
       }
 
-      if (parentPlayerId != null) break; // Eşleşen ilk veliyi al
+      if (parentPlayerId != null) break;
     }
 
     // 4. Firestore'a bildirimi yaz
@@ -149,10 +192,9 @@ class _BildirimScreenState extends State<BildirimScreen> {
     });
 
     // 5. notified: true yap
-    await FirebaseFirestore.instance
-        .collection('lessons')
-        .doc(lessonId)
-        .update({'notified': true});
+    await FirebaseFirestore.instance.collection('lessons').doc(lessonId).update(
+      {'notified': true},
+    );
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Bildirim başarıyla gönderildi')),
@@ -165,23 +207,21 @@ class _BildirimScreenState extends State<BildirimScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Bildirim Gönder",
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.bold,
-            )),
+        title: const Text(
+          "Bildirim Gönder",
+          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        ),
         backgroundColor: Colors.blue[800],
         elevation: 0,
         centerTitle: true,
         iconTheme: const IconThemeData(color: Colors.white),
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(
-            bottom: Radius.circular(20),
-          ),
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
         ),
       ),
       backgroundColor: Colors.blue[50],
-      body: isLoading
+      body:
+      isLoading
           ? Center(
         child: CircularProgressIndicator(
           valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[700]!),
@@ -191,10 +231,7 @@ class _BildirimScreenState extends State<BildirimScreen> {
           ? Center(
         child: Text(
           "Son 24 saat içinde ders bulunamadı",
-          style: TextStyle(
-            color: Colors.blue[800],
-            fontSize: 16,
-          ),
+          style: TextStyle(color: Colors.blue[800], fontSize: 16),
         ),
       )
           : ListView.builder(
@@ -202,16 +239,19 @@ class _BildirimScreenState extends State<BildirimScreen> {
         itemCount: lessons.length,
         itemBuilder: (context, index) {
           final lesson = lessons[index];
-          final dateFormatted = lesson['date'] != null
-              ? DateFormat('dd MMMM yyyy', 'tr_TR').format(lesson['date'])
+          final dateFormatted =
+          lesson['date'] != null
+              ? DateFormat(
+            'dd MMMM yyyy',
+            'tr_TR',
+          ).format(lesson['date'])
               : 'Tarih belirtilmemiş';
 
-          final timeFormatted = lesson['time'] ?? ''; // eğer time null ise boş bırak
-
-          final dateTimeText = timeFormatted.isNotEmpty
+          final timeFormatted = lesson['time'] ?? '';
+          final dateTimeText =
+          timeFormatted.isNotEmpty
               ? '$dateFormatted - $timeFormatted'
               : dateFormatted;
-
 
           return Container(
             margin: const EdgeInsets.only(bottom: 16),
@@ -260,10 +300,13 @@ class _BildirimScreenState extends State<BildirimScreen> {
                           ),
                           const SizedBox(height: 4),
                           Text(
+                            'Öğrenci: ${lesson['studentName']}',
+                            style: TextStyle(color: Colors.blue[800]),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
                             'Eğitmen: ${lesson['teacherName']}',
-                            style: TextStyle(
-                              color: Colors.blue[800],
-                            ),
+                            style: TextStyle(color: Colors.blue[800]),
                           ),
                           const SizedBox(height: 4),
                           Text(

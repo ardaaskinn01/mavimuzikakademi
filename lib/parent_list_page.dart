@@ -5,6 +5,21 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'chat_screen.dart';
 import 'supervisor/reset_password_dialog.dart';
 
+// Branşlar listesi
+final List<String> allBranches = [
+  'Gitar',
+  'Piyano',
+  'Yan flüt',
+  'Keman',
+  'Ney',
+  'Bağlama',
+  'Müzikli drama',
+  'Solfej',
+  'Ukulele',
+  'Viyolonsel',
+  'Resim',
+];
+
 class ParentListPage extends StatefulWidget {
   const ParentListPage({super.key});
 
@@ -29,6 +44,150 @@ class _ParentListPageState extends State<ParentListPage> {
     setState(() {
       currentUserRole = doc.data()?['role'];
     });
+  }
+
+  // Branş düzenleme pop-up'ını gösteren fonksiyon
+  void _showEditBranchesDialog(DocumentSnapshot parentDoc) {
+    final parentData = parentDoc.data() as Map<String, dynamic>;
+    final parentName = parentData['name'] ?? 'İsimsiz';
+    final students = List.from(parentData['students'] ?? []);
+
+    // Her öğrenci için seçili branşları tutan bir harita oluştur
+    final Map<String, List<String>> selectedBranchesMap = {};
+    for (var student in students) {
+      final studentName = student['name'];
+      if (studentName != null) {
+        selectedBranchesMap[studentName] = List<String>.from(student['branches'] ?? []);
+      }
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Text(
+                "$parentName Branşları Düzenle",
+                style: TextStyle(color: Colors.blue[900], fontWeight: FontWeight.bold),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: students.map((student) {
+                    final studentName = student['name'];
+                    if (studentName == null) return const SizedBox.shrink();
+
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            studentName,
+                            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blue[800]),
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8.0,
+                            children: allBranches.map((branch) {
+                              final isSelected = selectedBranchesMap[studentName]!.contains(branch);
+                              return FilterChip(
+                                label: Text(branch),
+                                selected: isSelected,
+                                onSelected: (selected) {
+                                  setState(() {
+                                    if (selected) {
+                                      selectedBranchesMap[studentName]!.add(branch);
+                                    } else {
+                                      selectedBranchesMap[studentName]!.remove(branch);
+                                    }
+                                  });
+                                },
+                                selectedColor: Colors.blue[100],
+                                checkmarkColor: Colors.blue[900],
+                                labelStyle: TextStyle(
+                                  color: isSelected ? Colors.blue[900] : Colors.blue[800],
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    "İptal",
+                    style: TextStyle(color: Colors.blue[700]),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    _saveBranches(parentDoc.id, students, selectedBranchesMap);
+                    Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[700],
+                  ),
+                  child: const Text(
+                    "Kaydet",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Firestore'da branşları güncelleyen fonksiyon
+  Future<void> _saveBranches(
+      String parentId,
+      List<dynamic> students,
+      Map<String, List<String>> selectedBranchesMap,
+      ) async {
+    try {
+      final updatedStudents = students.map((student) {
+        final studentName = student['name'];
+        if (studentName != null) {
+          return {
+            ...student,
+            'branches': selectedBranchesMap[studentName],
+          };
+        }
+        return student;
+      }).toList();
+
+      await FirebaseFirestore.instance.collection('users').doc(parentId).update({
+        'students': updatedStudents,
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Branşlar başarıyla güncellendi!"),
+            backgroundColor: Colors.green[600],
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Branşları güncellerken hata oluştu: $e"),
+            backgroundColor: Colors.red[600],
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -279,6 +438,15 @@ class _ParentListPageState extends State<ParentListPage> {
                                   context: context,
                                   builder: (_) => ResetPasswordDialog(username: username),
                                 );
+                              },
+                            ),
+                          // Yeni eklenen düzenleme butonu
+                          if (currentUserRole == 'supervisor')
+                            IconButton(
+                              icon: Icon(Icons.edit, color: Colors.blue[700]),
+                              tooltip: "Branşları Düzenle",
+                              onPressed: () {
+                                _showEditBranchesDialog(doc);
                               },
                             ),
                           IconButton(

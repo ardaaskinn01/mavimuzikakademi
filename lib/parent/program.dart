@@ -20,12 +20,10 @@ class ParentProgramScreen extends StatelessWidget {
     int daysDifference = (startWeekday - fromWeekday) % 7;
     DateTime nextDate = fromDate.add(Duration(days: daysDifference));
 
-    // Aynı gün ise ve zaman geçmişse 1 hafta sonraya al
     if (_isSameDate(nextDate, fromDate) && fromDate.isAfter(startDate)) {
       nextDate = nextDate.add(Duration(days: 7));
     }
 
-    // Saati ve dakikayı başlangıç tarihinden al
     return DateTime(
       nextDate.year,
       nextDate.month,
@@ -43,15 +41,32 @@ class ParentProgramScreen extends StatelessWidget {
     final firestore = FirebaseFirestore.instance;
     final now = DateTime.now();
 
-    // Firestore'dan dersleri çek
-    final lessonsSnapshot = await firestore
+    // Bireysel dersleri çek
+    final individualLessons = await firestore
         .collection('lessons')
         .where('studentId', isEqualTo: parentId)
         .get();
 
+    // Grup derslerini çek
+    final groupLessons = await firestore
+        .collection('lessons')
+        .where('isGroupLesson', isEqualTo: true)
+        .where('studentIds', arrayContains: parentId)
+        .get();
+
+    List<QueryDocumentSnapshot> allDocs = [...individualLessons.docs, ...groupLessons.docs];
+
+    // Yinelenen dersleri filtreleme
+    // Aynı 'id'ye sahip dersleri tekilleştirme
+    final uniqueDocs = allDocs.fold<Map<String, QueryDocumentSnapshot>>({}, (map, doc) {
+      map[doc.id] = doc;
+      return map;
+    }).values.toList();
+
+
     List<_LessonDisplayData> lessonDisplayList = [];
 
-    for (var lessonDoc in lessonsSnapshot.docs) {
+    for (var lessonDoc in uniqueDocs) {
       final data = lessonDoc.data() as Map<String, dynamic>;
 
       final Timestamp? timestamp = data['date'];
@@ -110,6 +125,10 @@ class ParentProgramScreen extends StatelessWidget {
             );
           }
 
+          if (snapshot.hasError) {
+            return Center(child: Text("Bir hata oluştu: ${snapshot.error}"));
+          }
+
           if (!snapshot.hasData || snapshot.data!.isEmpty) {
             return Center(
               child: Text(
@@ -137,7 +156,16 @@ class ParentProgramScreen extends StatelessWidget {
               final formattedTime = data['time'] ?? 'Saat bilgisi yok';
               final branch = data['branch'] ?? 'Ders Başlığı Yok';
               final teacherName = data['teacherName'] ?? 'Eğitmen Bilinmiyor';
-              final studentName = data['studentName'] ?? 'Öğrenci Bilinmiyor';
+
+              // Grup dersi kontrolü
+              final isGroupLesson = data['isGroupLesson'] ?? false;
+              String studentInfo;
+              if (isGroupLesson) {
+                final List<String> studentNames = List.from(data['studentNames'] ?? []);
+                studentInfo = studentNames.join(', ');
+              } else {
+                studentInfo = data['studentName'] ?? 'Öğrenci Bilinmiyor';
+              }
 
               return Container(
                 margin: const EdgeInsets.only(bottom: 16),
@@ -167,7 +195,7 @@ class ParentProgramScreen extends StatelessWidget {
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
-                            Icons.music_note,
+                            isGroupLesson ? Icons.groups : Icons.person,
                             color: Colors.blue[700],
                             size: 24,
                           ),
@@ -178,7 +206,7 @@ class ParentProgramScreen extends StatelessWidget {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                '$branch - $studentName',
+                                '$branch - $studentInfo',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
                                   color: Colors.blue[900],

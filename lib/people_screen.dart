@@ -3,7 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:mavimuzikakademi/chat_screen.dart';
 import 'package:mavimuzikakademi/supervisor/all_chats_screen.dart';
-
+import 'package:intl/intl.dart';
 import 'custombar.dart';
 
 class PeopleScreen extends StatefulWidget {
@@ -19,19 +19,16 @@ class _PeopleScreenState extends State<PeopleScreen> {
   String? currentUserRole;
   String? userName;
   String? username;
-  String? role;
 
   @override
   void initState() {
     super.initState();
-    // initState içinde async işlemler yaparken dikkatli olmak gerekir.
-    // Bu yüzden _loadInitialData gibi birleşik bir fonksiyon kullanabiliriz.
     _loadInitialData();
   }
 
   Future<void> _loadInitialData() async {
     await _fetchCurrentUserRoleAndInfo();
-    setState(() {}); // Rol bilgisi geldikten sonra arayüzü yeniden çizmek için.
+    setState(() {});
   }
 
   Future<void> _fetchCurrentUserRoleAndInfo() async {
@@ -46,7 +43,7 @@ class _PeopleScreenState extends State<PeopleScreen> {
     }
   }
 
-  // YENİ EKLENEN FONKSİYON: İlişkili kullanıcı ID'lerini getirir.
+  // İlgili kullanıcıların ID'lerini role göre getiren fonksiyon
   Future<List<String>> _getRelatedUserIds() async {
     if (currentUserId == null || currentUserRole == null) return [];
 
@@ -62,7 +59,13 @@ class _PeopleScreenState extends State<PeopleScreen> {
     }
 
     // 2. Role özel filtreleme yap.
-    if (currentUserRole == 'teacher') {
+    if (currentUserRole == 'supervisor') {
+      // Supervisor ise kendi hariç tüm kullanıcıları getir.
+      final allUsersSnapshot = await FirebaseFirestore.instance.collection('users').get();
+      for (var doc in allUsersSnapshot.docs) {
+        relatedIds.add(doc.id);
+      }
+    } else if (currentUserRole == 'teacher') {
       // Öğretmense, ders verdiği öğrencilerin velilerini ve öğrencileri bul.
       final lessonsSnapshot = await FirebaseFirestore.instance
           .collection('lessons')
@@ -73,7 +76,6 @@ class _PeopleScreenState extends State<PeopleScreen> {
           relatedIds.add(lesson['parentId']);
         }
         if (lesson.data().containsKey('studentId') && lesson['studentId'] != null) {
-          // Öğrenciler de 'users' koleksiyonunda ise onları da ekle.
           relatedIds.add(lesson['studentId']);
         }
       }
@@ -81,7 +83,7 @@ class _PeopleScreenState extends State<PeopleScreen> {
       // Veliyse, çocuğunun öğretmenlerini bul.
       final lessonsSnapshot = await FirebaseFirestore.instance
           .collection('lessons')
-          .where('studentId', isEqualTo: currentUserId)
+          .where('parentId', isEqualTo: currentUserId)
           .get();
       for (var lesson in lessonsSnapshot.docs) {
         if (lesson.data().containsKey('teacherId') && lesson['teacherId'] != null) {
@@ -90,9 +92,7 @@ class _PeopleScreenState extends State<PeopleScreen> {
       }
     }
 
-    // Kullanıcının kendisini listeden çıkar.
     relatedIds.remove(currentUserId);
-
     return relatedIds.toList();
   }
 
@@ -108,6 +108,22 @@ class _PeopleScreenState extends State<PeopleScreen> {
         return 'Öğrenci';
       default:
         return 'Bilinmiyor';
+    }
+  }
+
+  // Tarih formatlama fonksiyonu
+  String _formatTimestamp(DateTime timestamp) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final yesterday = DateTime(now.year, now.month, now.day - 1);
+    final messageDate = DateTime(timestamp.year, timestamp.month, timestamp.day);
+
+    if (messageDate == today) {
+      return 'Bugün ${DateFormat('HH:mm').format(timestamp)}';
+    } else if (messageDate == yesterday) {
+      return 'Dün ${DateFormat('HH:mm').format(timestamp)}';
+    } else {
+      return DateFormat('dd.MM.yyyy HH:mm').format(timestamp);
     }
   }
 
@@ -162,7 +178,30 @@ class _PeopleScreenState extends State<PeopleScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
             child: Container(
-              // ... arama kutusu stilleri aynı ...
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.blue.withOpacity(0.1),
+                    blurRadius: 8,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: TextField(
+                onChanged: (value) {
+                  setState(() {
+                    searchQuery = value.toLowerCase();
+                  });
+                },
+                decoration: InputDecoration(
+                  hintText: "İsim ara...",
+                  border: InputBorder.none,
+                  prefixIcon: Icon(Icons.search, color: Colors.blue[700]),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                ),
+              ),
             ),
           ),
 
@@ -180,32 +219,15 @@ class _PeopleScreenState extends State<PeopleScreen> {
     );
   }
 
-  // YENİ WIDGET: Arayüzü daha temiz tutmak için kullanıcı listesi mantığını ayırır.
+  // TÜM KULLANICILARI VE SOHBET GEÇMİŞİNİ BİRLEŞTİREN BÖLÜM
   Widget _buildUserList() {
-    // Supervisor herkesi görür.
-    if (currentUserRole == 'supervisor') {
-      return StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance.collection('users').snapshots(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return Center(child: CircularProgressIndicator());
-          }
-          final users = snapshot.data!.docs.where((doc) {
-            return doc.id != currentUserId &&
-                (doc['name'] ?? '').toString().toLowerCase().contains(searchQuery);
-          }).toList();
-          return _buildListView(users);
-        },
-      );
-    }
-
-    // Diğer roller (teacher, parent) için FutureBuilder -> StreamBuilder yapısı
     return FutureBuilder<List<String>>(
-      future: _getRelatedUserIds(),
+      future: _getRelatedUserIds(), // İlgili kullanıcıların ID'lerini getir
       builder: (context, relatedIdsSnapshot) {
         if (relatedIdsSnapshot.connectionState == ConnectionState.waiting) {
           return Center(child: CircularProgressIndicator());
         }
+
         if (!relatedIdsSnapshot.hasData || relatedIdsSnapshot.data!.isEmpty) {
           return Center(
             child: Text(
@@ -215,234 +237,293 @@ class _PeopleScreenState extends State<PeopleScreen> {
           );
         }
 
-        final userIds = relatedIdsSnapshot.data!;
+        final relatedUserIds = relatedIdsSnapshot.data!;
 
-        return StreamBuilder<QuerySnapshot>(
-          stream: FirebaseFirestore.instance
-              .collection('users')
-              .where(FieldPath.documentId, whereIn: userIds)
-              .snapshots(),
+        return FutureBuilder<List<QueryDocumentSnapshot>>(
+          future: _fetchUsersInBatches(relatedUserIds),
           builder: (context, usersSnapshot) {
-            if (!usersSnapshot.hasData) {
+            if (usersSnapshot.connectionState == ConnectionState.waiting) {
               return Center(child: CircularProgressIndicator());
             }
 
-            final users = usersSnapshot.data!.docs.where((doc) {
-              final name = (doc['name'] ?? '').toString().toLowerCase();
-              return name.contains(searchQuery);
-            }).toList();
+            final allRelatedUsers = usersSnapshot.data ?? [];
 
-            return _buildListView(users);
-          },
-        );
-      },
-    );
-  }
+            return StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance
+                  .collection('chats')
+                  .where('participants', arrayContains: currentUserId)
+                  .snapshots(),
+              builder: (context, chatsSnapshot) {
+                if (!chatsSnapshot.hasData) {
+                  return Center(child: CircularProgressIndicator());
+                }
 
-  // YENİ WIDGET: ListView.builder kod tekrarını önlemek için ayrıldı.
-  Widget _buildListView(List<QueryDocumentSnapshot> users) {
-    if (users.isEmpty) {
-      return Center(
-        child: Text(
-          "Kullanıcı bulunamadı.",
-          style: TextStyle(color: Colors.blue[800], fontSize: 16),
-        ),
-      );
-    }
+                final chatDocs = chatsSnapshot.data!.docs;
+                final chatMap = _createChatMap(chatDocs);
 
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
-      itemCount: users.length,
-      itemBuilder: (context, index) {
-        final user = users[index];
-        final userName = user['name'] ?? 'İsimsiz';
-        final data = user.data() as Map<String, dynamic>;
+                // Tüm ilgili kullanıcıları sohbet verileriyle birleştir
+                final List<Map<String, dynamic>> userChatData = [];
+                for (final userDoc in allRelatedUsers) {
+                  final userData = userDoc.data() as Map<String, dynamic>;
+                  final chatId = _getChatId(currentUserId!, userDoc.id);
+                  final chatData = chatMap[chatId];
+                  final lastTimestamp = (chatData?['lastTimestamp'] as Timestamp?)?.toDate();
 
-        return FutureBuilder<DocumentSnapshot>(
-          future:
-          FirebaseFirestore.instance
-              .collection('chats')
-              .doc(_getChatId(currentUserId!, user.id))
-              .get(),
-          builder: (context, chatSnapshot) {
-            String lastMessage = '';
-            if (chatSnapshot.hasData && chatSnapshot.data!.exists) {
-              final data =
-              chatSnapshot.data!.data() as Map<String, dynamic>;
-              lastMessage = data['lastMessage'] ?? '';
-            }
+                  userChatData.add({
+                    'user': userData,
+                    'userId': userDoc.id,
+                    'lastMessage': chatData?['lastMessage'],
+                    'lastTimestamp': lastTimestamp,
+                  });
+                }
 
-            return Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.blue.withOpacity(0.1),
-                    blurRadius: 8,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: Card(
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                elevation: 0,
-                color: Colors.white,
-                child: ListTile(
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                  leading:
-                  data.containsKey('profileImage') &&
-                      data['profileImage'] != null &&
-                      data['profileImage']
-                          .toString()
-                          .isNotEmpty
-                      ? Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.blue[100]!,
-                        width: 2,
-                      ),
-                    ),
-                    child: ClipOval(
-                      child: Image.network(
-                        data['profileImage'],
-                        width: 48,
-                        height: 48,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                  )
-                      : CircleAvatar(
-                    backgroundColor: Colors.blue[100],
-                    radius: 24,
+                // Sohbeti olanları en üste, olmayanları ise alfabetik sıraya göre sırala
+                userChatData.sort((a, b) {
+                  final timeA = a['lastTimestamp'] ?? DateTime(0);
+                  final timeB = b['lastTimestamp'] ?? DateTime(0);
+
+                  // İkisi de sohbet geçmişine sahipse, zamana göre sırala
+                  if (timeA.millisecondsSinceEpoch > 0 && timeB.millisecondsSinceEpoch > 0) {
+                    return timeB.compareTo(timeA);
+                  }
+                  // Sadece biri sohbet geçmişine sahipse, o en üstte olur
+                  if (timeA.millisecondsSinceEpoch > 0) return -1;
+                  if (timeB.millisecondsSinceEpoch > 0) return 1;
+                  // İkisinin de sohbeti yoksa, isme göre sırala
+                  return a['user']['name'].compareTo(b['user']['name']);
+                });
+
+                // Arama sorgusuna göre filtreleme
+                final filteredData = userChatData.where((data) {
+                  final name = (data['user']['name'] ?? '').toString().toLowerCase();
+                  return name.contains(searchQuery);
+                }).toList();
+
+                if (filteredData.isEmpty) {
+                  return Center(
                     child: Text(
-                      userName[0].toUpperCase(),
-                      style: TextStyle(
-                        color: Colors.blue[800],
-                        fontWeight: FontWeight.bold,
-                      ),
+                      "Kullanıcı bulunamadı.",
+                      style: TextStyle(color: Colors.blue[800], fontSize: 16),
                     ),
-                  ),
-                  title: Row(
-                    children: [
-                      Text(
-                        userName,
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue[900],
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Colors.blue[50],
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          _getTurkishRole(user['role']),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.blue[800],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  subtitle: Padding(
-                    padding: const EdgeInsets.only(top: 4),
-                    child: Text(
-                      lastMessage.isNotEmpty
-                          ? lastMessage
-                          : "Henüz mesaj yok.",
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color:
-                        lastMessage.isNotEmpty
-                            ? Colors.blue[800]
-                            : Colors.blue[400],
-                      ),
-                    ),
-                  ),
-                  onTap: () {
-                    final targetRole = user['role'];
-                    final now = DateTime.now().toUtc().add(
-                      const Duration(hours: 3),
-                    ); // Türkiye saati
+                  );
+                }
 
-                    final currentHour = now.hour;
-                    final isWithinWorkingHours =
-                        currentHour >= 8 && currentHour < 18;
-
-                    if (currentUserRole == 'parent' &&
-                        targetRole == 'teacher' &&
-                        !isWithinWorkingHours) {
-                      showDialog(
-                        context: context,
-                        builder:
-                            (context) => AlertDialog(
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(
-                              16,
-                            ),
-                          ),
-                          title: Text(
-                            "Mesaj Gönderilemez",
-                            style: TextStyle(
-                              color: Colors.blue[900],
-                            ),
-                          ),
-                          content: const Text(
-                            "Eğitmenlere sadece 08:00 - 18:00 saatleri arasında mesaj gönderebilirsiniz.",
-                          ),
-                          actions: [
-                            TextButton(
-                              onPressed:
-                                  () => Navigator.pop(context),
-                              child: Text(
-                                "Tamam",
-                                style: TextStyle(
-                                  color: Colors.blue[700],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                      return;
-                    }
-
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder:
-                            (context) =>
-                            ChatScreen(receiverId: user.id),
-                      ),
-                    );
-                  },
-                ),
-              ),
+                return _buildListView(filteredData);
+              },
             );
           },
         );
       },
     );
   }
-}
 
-String _getChatId(String uid1, String uid2) {
-  return uid1.hashCode <= uid2.hashCode ? "$uid1\_$uid2" : "$uid2\_$uid1";
+  // Firebase kısıtlamasını aşmak için kullanıcıları 30'lu gruplar halinde çeken fonksiyon
+  Future<List<QueryDocumentSnapshot>> _fetchUsersInBatches(List<String> userIds) async {
+    List<List<String>> batches = [];
+    int batchSize = 30;
+    for (int i = 0; i < userIds.length; i += batchSize) {
+      batches.add(
+          userIds.sublist(i, i + batchSize > userIds.length ? userIds.length : i + batchSize));
+    }
+
+    List<QueryDocumentSnapshot> allUsers = [];
+    for (var batch in batches) {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('users')
+          .where(FieldPath.documentId, whereIn: batch)
+          .get();
+      allUsers.addAll(snapshot.docs);
+    }
+    return allUsers;
+  }
+
+  // Sohbet verilerini hızlı erişim için bir haritaya dönüştürür
+  Map<String, Map<String, dynamic>> _createChatMap(List<QueryDocumentSnapshot> chatDocs) {
+    final Map<String, Map<String, dynamic>> chatMap = {};
+    for (final chat in chatDocs) {
+      final participants = List<String>.from(chat['participants'] ?? []);
+      participants.sort();
+      final chatId = participants.join('_');
+      chatMap[chatId] = chat.data() as Map<String, dynamic>;
+    }
+    return chatMap;
+  }
+
+  // Sohbet ID'sini oluşturan fonksiyon
+  String _getChatId(String userId1, String userId2) {
+    final List<String> participants = [userId1, userId2];
+    participants.sort();
+    return participants.join('_');
+  }
+
+  // Liste görünümünü oluşturur
+  Widget _buildListView(List<Map<String, dynamic>> userChatData) {
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+      itemCount: userChatData.length,
+      itemBuilder: (context, index) {
+        final data = userChatData[index];
+        final userData = data['user'] as Map<String, dynamic>;
+        final lastMessage = data['lastMessage'] ?? '';
+        final lastTimestamp = data['lastTimestamp'] as DateTime?;
+
+        return Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.blue.withOpacity(0.1),
+                blurRadius: 8,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Card(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
+            elevation: 0,
+            color: Colors.white,
+            child: ListTile(
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+              leading: userData.containsKey('profileImage') &&
+                  userData['profileImage'] != null &&
+                  userData['profileImage'].toString().isNotEmpty
+                  ? Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.blue[100]!,
+                    width: 2,
+                  ),
+                ),
+                child: ClipOval(
+                  child: Image.network(
+                    userData['profileImage'],
+                    width: 48,
+                    height: 48,
+                    fit: BoxFit.cover,
+                  ),
+                ),
+              )
+                  : CircleAvatar(
+                backgroundColor: Colors.blue[100],
+                radius: 24,
+                child: Text(
+                  (userData['name'] ?? ' ')[0].toUpperCase(),
+                  style: TextStyle(
+                    color: Colors.blue[800],
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              title: Row(
+                children: [
+                  Text(
+                    userData['role'] == 'parent' &&
+                        userData['students'] != null &&
+                        (userData['students'] as List).isNotEmpty
+                        ? "${userData['name']} (${(userData['students'][0] as Map<String, dynamic>)['name'] ?? ''} velisi)"
+                        : userData['name'] ?? 'İsimsiz',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue[900],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[50],
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      _getTurkishRole(userData['role']),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue[800],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      lastMessage.isNotEmpty ? lastMessage : "Henüz mesaj yok.",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: lastMessage.isNotEmpty ? Colors.blue[800] : Colors.blue[400],
+                      ),
+                    ),
+                    if (lastTimestamp != null)
+                      Text(
+                        _formatTimestamp(lastTimestamp),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.blue[400],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              onTap: () {
+                final targetRole = userData['role'];
+                final now = DateTime.now().toUtc().add(const Duration(hours: 3));
+                final currentHour = now.hour;
+                final isWithinWorkingHours = currentHour >= 8 && currentHour < 18;
+
+                if (currentUserRole == 'parent' &&
+                    targetRole == 'teacher' &&
+                    !isWithinWorkingHours) {
+                  showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      title: Text(
+                        "Mesaj Gönderilemez",
+                        style: TextStyle(color: Colors.blue[900]),
+                      ),
+                      content: const Text(
+                        "Eğitmenlere sadece 08:00 - 18:00 saatleri arasında mesaj gönderebilirsiniz.",
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: Text(
+                            "Tamam",
+                            style: TextStyle(color: Colors.blue[700]),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                  return;
+                }
+
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ChatScreen(receiverId: data['userId']),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
 }

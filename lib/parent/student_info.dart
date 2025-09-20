@@ -16,7 +16,7 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
   bool isLoading = true;
   List<Map<String, dynamic>> attendanceRecords = [];
   List<Map<String, dynamic>> students = [];
-  String? selectedStudentId;
+  String? selectedStudentName;
 
   @override
   void initState() {
@@ -39,12 +39,12 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
     setState(() {
       students = List<Map<String, dynamic>>.from(parentData?['students'] ?? []);
       if (students.isNotEmpty) {
-        selectedStudentId = students.first['name']; // Öğrenci adını kullanıyoruz
+        selectedStudentName = students.first['name'];
       }
     });
 
-    if (selectedStudentId != null) {
-      await loadStudentAttendance(selectedStudentId!);
+    if (selectedStudentName != null) {
+      await loadStudentAttendance(selectedStudentName!);
     } else {
       setState(() => isLoading = false);
     }
@@ -54,34 +54,68 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
     setState(() => isLoading = true);
     List<Map<String, dynamic>> tempAttendance = [];
 
+    // Tüm dersleri sorgula
     final lessonsSnapshot = await FirebaseFirestore.instance
         .collection('lessons')
-        .where('studentName', isEqualTo: studentName)
         .get();
 
     for (var lessonDoc in lessonsSnapshot.docs) {
-      final lessonId = lessonDoc.id;
       final lessonData = lessonDoc.data();
+      final isGroupLesson = lessonData['isGroupLesson'] ?? false;
+      bool isStudentInLesson = false;
 
-      final attendanceDoc = await FirebaseFirestore.instance
-          .collection('lessons')
-          .doc(lessonId)
-          .collection('attendances')
-          .doc(widget.parentUserId)
-          .get();
+      // Öğrencinin bu derste olup olmadığını kontrol et
+      if (isGroupLesson) {
+        final studentNames = List<String>.from(lessonData['studentNames'] ?? []);
+        if (studentNames.contains(studentName)) {
+          isStudentInLesson = true;
+        }
+      } else {
+        if (lessonData['studentName'] == studentName) {
+          isStudentInLesson = true;
+        }
+      }
 
-      if (attendanceDoc.exists) {
-        final attData = attendanceDoc.data();
-        tempAttendance.add({
-          'lessonId': lessonId,
-          'lessonBranch': lessonData['branch'] ?? '',
-          'date': (lessonData['date'] as Timestamp).toDate(),
-          'status': attData?['status'] ?? 'unknown',
-          'studentName': studentName,
-        });
+      if (isStudentInLesson) {
+        final lessonId = lessonDoc.id;
+
+        // Tüm attendance dokümanlarını getir
+        final attendanceSnapshot = await FirebaseFirestore.instance
+            .collection('lessons')
+            .doc(lessonId)
+            .collection('attendances')
+            .get();
+
+        for (var attDoc in attendanceSnapshot.docs) {
+          final attData = attDoc.data();
+
+          // Bu attendance kaydının bu öğrenciye ait olup olmadığını kontrol et
+          // Görsellere göre doküman ID'si öğrenci ID'si veya parent ID'si içeriyor
+          if (attDoc.id.contains(widget.parentUserId) ||
+              (attData['studentId'] != null && students.any((s) => s['id'] == attData['studentId']))) {
+
+            // Tarih bilgisini al (occurrenceDate varsa onu kullan, yoksa lesson date'i kullan)
+            Timestamp dateTimestamp;
+            if (attData['occurrenceDate'] != null) {
+              dateTimestamp = attData['occurrenceDate'] as Timestamp;
+            } else {
+              dateTimestamp = lessonData['date'] as Timestamp;
+            }
+
+            tempAttendance.add({
+              'lessonId': lessonId,
+              'lessonBranch': lessonData['branch'] ?? '',
+              'date': dateTimestamp.toDate(),
+              'status': attData['status'] ?? 'unknown',
+              'studentName': studentName,
+              'isGroupLesson': isGroupLesson,
+            });
+          }
+        }
       }
     }
 
+    // Tarihe göre sırala (yeniden eskiye)
     tempAttendance.sort((a, b) => b['date'].compareTo(a['date']));
 
     setState(() {
@@ -92,6 +126,8 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
 
   @override
   Widget build(BuildContext context) {
+    Intl.defaultLocale = 'tr_TR';
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -109,7 +145,6 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
       backgroundColor: Colors.blue[50],
       body: Column(
         children: [
-          // Öğrenci Seçim Dropdown
           if (students.length > 1)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -121,7 +156,7 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
                   border: Border.all(color: Colors.blue[100]!),
                 ),
                 child: DropdownButton<String>(
-                  value: selectedStudentId,
+                  value: selectedStudentName,
                   isExpanded: true,
                   underline: const SizedBox(),
                   items: students.map((student) {
@@ -135,7 +170,7 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
                   }).toList(),
                   onChanged: (String? newValue) {
                     if (newValue != null) {
-                      setState(() => selectedStudentId = newValue);
+                      setState(() => selectedStudentName = newValue);
                       loadStudentAttendance(newValue);
                     }
                   },
@@ -146,7 +181,8 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
             child: isLoading
                 ? Center(
               child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[700]!),
+                valueColor:
+                AlwaysStoppedAnimation<Color>(Colors.blue[700]!),
               ),
             )
                 : attendanceRecords.isEmpty
@@ -221,15 +257,45 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
                           const SizedBox(width: 16),
                           Expanded(
                             child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                              crossAxisAlignment:
+                              CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  record['studentName'],
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.blue[900],
-                                    fontSize: 16,
-                                  ),
+                                Row(
+                                  children: [
+                                    Text(
+                                      record['studentName'],
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.blue[900],
+                                        fontSize: 16,
+                                      ),
+                                    ),
+                                    if (record['isGroupLesson'] == true)
+                                      Padding(
+                                        padding:
+                                        const EdgeInsets.only(left: 8),
+                                        child: Container(
+                                          padding: const EdgeInsets
+                                              .symmetric(
+                                              horizontal: 6,
+                                              vertical: 2),
+                                          decoration: BoxDecoration(
+                                            color: Colors.blue[100],
+                                            borderRadius:
+                                            BorderRadius.circular(8),
+                                          ),
+                                          child: Text(
+                                            'Grup',
+                                            style: TextStyle(
+                                              color: Colors.blue[800],
+                                              fontSize: 12,
+                                              fontWeight:
+                                              FontWeight.bold,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
                                 ),
                                 Text(
                                   record['lessonBranch'],
@@ -241,7 +307,8 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
                                 const SizedBox(height: 4),
                                 Text(
                                   dateStr,
-                                  style: TextStyle(color: Colors.blue[600]),
+                                  style:
+                                  TextStyle(color: Colors.blue[600]),
                                 ),
                                 const SizedBox(height: 4),
                                 Container(
@@ -250,8 +317,10 @@ class _StudentInfoScreenState extends State<StudentInfoScreen> {
                                     vertical: 4,
                                   ),
                                   decoration: BoxDecoration(
-                                    color: statusColor.withOpacity(0.1),
-                                    borderRadius: BorderRadius.circular(12),
+                                    color:
+                                    statusColor.withOpacity(0.1),
+                                    borderRadius:
+                                    BorderRadius.circular(12),
                                   ),
                                   child: Text(
                                     statusLabel,

@@ -12,9 +12,11 @@ class StudentListScreen extends StatefulWidget {
 
 class _StudentListScreenState extends State<StudentListScreen> {
   final currentTeacherId = FirebaseAuth.instance.currentUser?.uid;
-  String? selectedStudentId; // Seçilen öğrencinin adı
+  String? selectedStudentId;
   List<Map<String, dynamic>> allStudents = [];
   List<Map<String, dynamic>> studentAbsences = [];
+  bool isLoadingStudents = true;
+  bool isLoadingAbsences = false;
 
   @override
   void initState() {
@@ -23,6 +25,10 @@ class _StudentListScreenState extends State<StudentListScreen> {
   }
 
   Future<void> loadAllStudents() async {
+    setState(() {
+      isLoadingStudents = true;
+    });
+
     final parentsQuery = await FirebaseFirestore.instance
         .collection('users')
         .where('role', isEqualTo: 'parent')
@@ -61,6 +67,7 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
     setState(() {
       allStudents = enrolledStudents;
+      isLoadingStudents = false;
       if (allStudents.isNotEmpty) {
         selectedStudentId = allStudents.first['name'];
         loadStudentAbsences(allStudents.first['parentId']);
@@ -70,7 +77,8 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
   Future<void> loadStudentAbsences(String studentId) async {
     setState(() {
-      studentAbsences = []; // Yükleme sırasında listeyi temizle
+      isLoadingAbsences = true;
+      studentAbsences = [];
     });
 
     final lessonQuery = await FirebaseFirestore.instance
@@ -100,11 +108,9 @@ class _StudentListScreenState extends State<StudentListScreen> {
 
     setState(() {
       studentAbsences = absences;
+      isLoadingAbsences = false;
     });
   }
-
-  // Bu fonksiyon artık kullanılmayacak
-  // Future<String> getParentName(String parentId) async { ... }
 
   @override
   Widget build(BuildContext context) {
@@ -125,6 +131,11 @@ class _StudentListScreenState extends State<StudentListScreen> {
       ),
       body: Column(
         children: [
+          if (isLoadingStudents)
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: LinearProgressIndicator(),
+            ),
           if (allStudents.isNotEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -152,7 +163,6 @@ class _StudentListScreenState extends State<StudentListScreen> {
                     if (newValue != null) {
                       setState(() {
                         selectedStudentId = newValue;
-                        studentAbsences = []; // Clear absences while loading
                       });
 
                       final selectedStudent = allStudents.firstWhere(
@@ -164,93 +174,107 @@ class _StudentListScreenState extends State<StudentListScreen> {
               ),
             ),
           Expanded(
-            child: allStudents.isEmpty
+            child: isLoadingStudents
+                ? const Center(child: CircularProgressIndicator())
+                : allStudents.isEmpty
                 ? const Center(child: Text('Kayıtlı öğrenci bulunamadı.'))
-                : FutureBuilder<void>(
-              future: selectedStudentId != null ? Future.value() : loadAllStudents(),
-              builder: (context, snapshot) {
-                if (studentAbsences.isEmpty && selectedStudentId != null) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                return ListView(
-                  children: [
-                    if (selectedStudentId != null)
-                      Padding(
-                        padding: const EdgeInsets.all(16.0),
-                        child: Text(
-                          "$selectedStudentId Devamsızlıkları",
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.black87,
+                : Column(
+              children: [
+                if (isLoadingAbsences)
+                  const LinearProgressIndicator(),
+                Expanded(
+                  child: ListView(
+                    children: [
+                      if (selectedStudentId != null)
+                        Padding(
+                          padding: const EdgeInsets.all(16.0),
+                          child: Text(
+                            "$selectedStudentId Devamsızlıkları",
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
+                            ),
                           ),
                         ),
-                      ),
-                    if (studentAbsences.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Text("Devamsızlık bilgisi bulunamadı."),
-                      ),
-                    ...studentAbsences.map((entry) {
-                      final formattedDate = DateFormat(
-                          'dd MMMM yyyy', 'tr_TR')
-                          .format(entry['date']);
-                      return Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        child: ListTile(
-                          dense: true,
-                          leading: Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: getStatusColor(entry['status']).withOpacity(0.2),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              getStatusIcon(entry['status']),
-                              color: getStatusColor(entry['status']),
-                              size: 20,
-                            ),
-                          ),
-                          title: Text(
-                            formattedDate,
-                            style: TextStyle(
-                                color: Colors.blue[900],
-                                fontWeight: FontWeight.w500),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                "Durum: ${getStatusText(entry['status'])}",
-                                style: TextStyle(color: Colors.blue[700]),
-                              ),
-                              Text(
-                                "Ders: ${entry['lessonBranch']}",
-                                style: TextStyle(color: Colors.blue[600]),
-                              ),
-                            ],
-                          ),
-                          trailing: IconButton(
-                            icon: Icon(Icons.chat, color: Colors.blue[700]),
-                            onPressed: () {
-                              final selectedStudent = allStudents.firstWhere(
-                                      (s) => s['name'] == selectedStudentId);
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      ChatScreen(receiverId: selectedStudent['parentId']),
+                      if (isLoadingAbsences)
+                        const Center(
+                            child: CircularProgressIndicator()),
+                      if (!isLoadingAbsences &&
+                          studentAbsences.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Text("Devamsızlık bilgisi bulunamadı."),
+                        ),
+                      if (!isLoadingAbsences)
+                        ...studentAbsences.map((entry) {
+                          final formattedDate = DateFormat(
+                              'dd MMMM yyyy', 'tr_TR')
+                              .format(entry['date']);
+                          return Container(
+                            margin: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 8),
+                            child: ListTile(
+                              dense: true,
+                              leading: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: getStatusColor(entry['status'])
+                                      .withOpacity(0.2),
+                                  shape: BoxShape.circle,
                                 ),
-                              );
-                            },
-                          ),
-                        ),
-                      );
-                    }).toList(),
-                  ],
-                );
-              },
+                                child: Icon(
+                                  getStatusIcon(entry['status']),
+                                  color: getStatusColor(entry['status']),
+                                  size: 20,
+                                ),
+                              ),
+                              title: Text(
+                                formattedDate,
+                                style: TextStyle(
+                                    color: Colors.blue[900],
+                                    fontWeight: FontWeight.w500),
+                              ),
+                              subtitle: Column(
+                                crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    "Durum: ${getStatusText(entry['status'])}",
+                                    style: TextStyle(
+                                        color: Colors.blue[700]),
+                                  ),
+                                  Text(
+                                    "Ders: ${entry['lessonBranch']}",
+                                    style: TextStyle(
+                                        color: Colors.blue[600]),
+                                  ),
+                                ],
+                              ),
+                              trailing: IconButton(
+                                icon: Icon(Icons.chat,
+                                    color: Colors.blue[700]),
+                                onPressed: () {
+                                  final selectedStudent = allStudents
+                                      .firstWhere((s) =>
+                                  s['name'] == selectedStudentId);
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => ChatScreen(
+                                          receiverId:
+                                          selectedStudent['parentId']),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ],

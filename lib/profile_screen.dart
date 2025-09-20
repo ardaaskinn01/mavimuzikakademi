@@ -26,7 +26,7 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   String? imageUrl;
   List<Map<String, dynamic>> students = [];
-  String? teacherBranch;
+  List<dynamic> teacherBranches = []; // Değişiklik burada
 
   @override
   void initState() {
@@ -51,7 +51,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
         });
       } else if (widget.role == 'teacher') {
         setState(() {
-          teacherBranch = data['branch'] ?? 'Bilinmiyor';
+          // Değişiklik burada
+          teacherBranches = data['branches'] ?? [];
         });
       }
     }
@@ -260,7 +261,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         _buildInfoTile(
                           icon: Icons.class_,
                           label: 'Branş',
-                          value: teacherBranch ?? '...',
+                          value: teacherBranches.isEmpty
+                              ? 'Bilinmiyor'
+                              : _formatBranches(teacherBranches), // Değişiklik burada
                           theme: theme,
                         ),
                       ],

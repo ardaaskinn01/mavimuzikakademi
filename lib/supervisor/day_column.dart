@@ -3,7 +3,7 @@ import 'package:intl/intl.dart';
 
 class DayRow extends StatelessWidget {
   final DateTime day;
-  final List<Map<String, dynamic>> dayEvents;
+  final List<Map<String, dynamic>>? dayEvents;
   final Function(Map<String, dynamic>) onEventTap;
 
   const DayRow({
@@ -12,6 +12,38 @@ class DayRow extends StatelessWidget {
     required this.dayEvents,
     required this.onEventTap,
   });
+
+  // Öğretmen rengini (string) Color nesnesine çeviren yardımcı fonksiyon
+  Color _getColorFromString(String colorName) {
+    switch (colorName.toLowerCase()) {
+      case 'mavi':
+        return Colors.blue;
+      case 'mor':
+        return Colors.purple;
+      case 'kırmızı':
+        return Colors.red;
+      case 'sarı':
+        return Colors.yellow.shade700;
+      case 'yeşil':
+        return Colors.green;
+      case 'turuncu':
+        return Colors.orange;
+      case 'pembe':
+        return Colors.pink;
+      case 'siyah':
+        return Colors.black;
+      case 'gri':
+        return Colors.grey;
+      case 'açık yeşil':
+        return Colors.lightGreen;
+      case 'kahverengi':
+        return Colors.brown;
+      case 'lacivert':
+        return Colors.indigo;
+      default:
+        return Colors.blueGrey; // Varsayılan renk
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -35,7 +67,7 @@ class DayRow extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Gün başlığı (daha kompakt)
+          // Gün başlığı
           Container(
             padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
             decoration: BoxDecoration(
@@ -75,7 +107,15 @@ class DayRow extends StatelessWidget {
           // Dersler (4'lü grid)
           Padding(
             padding: const EdgeInsets.all(8),
-            child: dayEvents.isEmpty
+            // 🟢 Burası değişti: dayEvents null ise CircularProgressIndicator göster
+            child: dayEvents == null
+                ? const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 8),
+                child: CircularProgressIndicator(),
+              ),
+            )
+                : dayEvents!.isEmpty
                 ? Center(
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
@@ -89,28 +129,34 @@ class DayRow extends StatelessWidget {
               ),
             )
                 : GridView.count(
-              crossAxisCount: 4, // 4 sütunlu grid
+              crossAxisCount: 4,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              childAspectRatio: 0.9, // Daha kareye yakın oran
-              crossAxisSpacing: 6, // Yatay boşluk
-              mainAxisSpacing: 6, // Dikey boşluk
+              childAspectRatio: 0.9,
+              crossAxisSpacing: 6,
+              mainAxisSpacing: 6,
               padding: EdgeInsets.zero,
-              children: dayEvents.map((event) {
+              children: dayEvents!.map((event) {
                 final time = event['time'] ?? '??:??';
                 final isMakeup = event['isMakeup'] == true;
+                final isGroupLesson = event['isGroupLesson'] == true;
                 final studentName = event['studentName'] ?? 'Öğrenci';
+
+                final teacherColorName = (event['teacherColor'] ?? 'gri').toString();
+                final teacherColor = _getColorFromString(teacherColorName);
 
                 return GestureDetector(
                   onTap: () => onEventTap(event),
                   child: Container(
                     padding: const EdgeInsets.all(6),
                     decoration: BoxDecoration(
-                      color: isMakeup ? Colors.orange[50] : Colors.blue[50],
+                      color: isMakeup
+                          ? Colors.amber.shade200
+                          : teacherColor.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(
-                        color: isMakeup ? Colors.orange : Colors.blue,
-                        width: 1,
+                        color: isMakeup ? Colors.orange : teacherColor,
+                        width: isMakeup ? 5 : 1,
                       ),
                     ),
                     child: Column(
@@ -119,12 +165,12 @@ class DayRow extends StatelessWidget {
                         Container(
                           padding: const EdgeInsets.all(4),
                           decoration: BoxDecoration(
-                            color: isMakeup ? Colors.orange[100] : Colors.blue[100],
+                            color: isMakeup ? Colors.orange.shade100 : teacherColor.withOpacity(0.2),
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
                             isMakeup ? Icons.autorenew : Icons.school,
-                            color: isMakeup ? Colors.orange[800] : Colors.blue[800],
+                            color: isMakeup ? Colors.orange.shade500 : teacherColor,
                             size: 12,
                           ),
                         ),
@@ -132,22 +178,34 @@ class DayRow extends StatelessWidget {
                         Text(
                           time,
                           style: TextStyle(
-                            color: isMakeup ? Colors.orange[900] : Colors.blue[900],
+                            color: isMakeup ? Colors.orange.shade500 : teacherColor,
                             fontWeight: FontWeight.bold,
                             fontSize: 13,
                           ),
                         ),
-                        Text(
-                          studentName.length > 10
-                              ? '${studentName.substring(0, 8)}..'
-                              : studentName,
-                          style: TextStyle(
-                            color: isMakeup ? Colors.orange[800] : Colors.blue[800],
-                            fontSize: 12,
+                        if (isGroupLesson)
+                          const Text(
+                            'Grup Dersi',
+                            style: TextStyle(
+                              color: Colors.blueGrey,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          )
+                        else
+                          Text(
+                            studentName.length > 10
+                                ? '${studentName.substring(0, 8)}..'
+                                : studentName,
+                            style: TextStyle(
+                              color: isMakeup ? Colors.orange.shade500 : teacherColor,
+                              fontSize: 12,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
                       ],
                     ),
                   ),

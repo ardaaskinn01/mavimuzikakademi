@@ -6,9 +6,6 @@ import 'package:intl/intl.dart';
 import '../dersprogrami.dart';
 import '../devamsizliklar.dart';
 
-// Assuming AddMakeupEventDialog is defined elsewhere
-// and used in the same way.
-
 class SupervisorStudentListScreen extends StatefulWidget {
   const SupervisorStudentListScreen({super.key});
 
@@ -19,7 +16,7 @@ class SupervisorStudentListScreen extends StatefulWidget {
 class _SupervisorStudentListScreenState extends State<SupervisorStudentListScreen> {
   final userId = FirebaseAuth.instance.currentUser!.uid;
   String? userRole;
-  String? selectedStudentId; // Will store the selected student's name for simplicity
+  String? selectedStudentId;
   List<Map<String, dynamic>> allStudents = [];
   List<Map<String, dynamic>> studentAbsences = [];
 
@@ -68,37 +65,90 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
   }
 
   Future<void> loadStudentAbsences(String studentName) async {
-    final lessonsQuery = await FirebaseFirestore.instance
+    // Bireysel dersler için sorgu
+    final individualLessonsQuery = await FirebaseFirestore.instance
         .collection('lessons')
         .where('studentName', isEqualTo: studentName)
         .get();
 
+    // Grup dersleri için sorgu - studentNames array'inde öğrenci adını içeren dersler
+    final groupLessonsQuery = await FirebaseFirestore.instance
+        .collection('lessons')
+        .where('studentNames', arrayContains: studentName)
+        .get();
+
     List<Map<String, dynamic>> absences = [];
 
-    for (var lesson in lessonsQuery.docs) {
-      final attendanceDoc = await FirebaseFirestore.instance
-          .collection('lessons')
-          .doc(lesson.id)
-          .collection('attendances')
-          .doc(lesson['studentId'])
-          .get();
+    // Bireysel dersleri işle
+    for (var lesson in individualLessonsQuery.docs) {
+      await processLessonAttendance(lesson, studentName, absences);
+    }
 
-      if (attendanceDoc.exists) {
-        final data = attendanceDoc.data()!;
-        absences.add({
-          'date': (data['timestamp'] as Timestamp).toDate(),
-          'status': data['status'] ?? 'bilinmiyor',
-          'lessonBranch': lesson['branch'] ?? 'Branş yok',
-          'teacherId': lesson['teacherId'],
-          'teacherName': lesson['teacherName'],
-          'studentId': lesson['studentId'] ?? allStudents.firstWhere((s) => s['name'] == studentName)['parentId'],
-        });
-      }
+    // Grup derslerini işle
+    for (var lesson in groupLessonsQuery.docs) {
+      await processLessonAttendance(lesson, studentName, absences);
     }
 
     setState(() {
       studentAbsences = absences;
     });
+  }
+
+  Future<void> processLessonAttendance(
+      QueryDocumentSnapshot<Map<String, dynamic>> lesson,
+      String studentName,
+      List<Map<String, dynamic>> absences) async {
+    final lessonData = lesson.data();
+    final bool isGroupLesson = lessonData['isGroupLesson'] ?? false;
+    final String studentId;
+
+    // Öğrenci ID'sini bul
+    if (isGroupLesson) {
+      // Grup dersi için studentNames ve studentIds listelerinden eşleşmeyi bul
+      final List<String> studentNames = List<String>.from(lessonData['studentNames'] ?? []);
+      final List<String> studentIds = List<String>.from(lessonData['studentIds'] ?? []);
+
+      final int index = studentNames.indexOf(studentName);
+      if (index != -1 && index < studentIds.length) {
+        studentId = studentIds[index];
+      } else {
+        // Eşleşme bulunamazsa, öğrenciyi allStudents listesinden bul
+        final student = allStudents.firstWhere(
+              (s) => s['name'] == studentName,
+          orElse: () => {'parentId': 'unknown'},
+        );
+        studentId = student['parentId'];
+      }
+    } else {
+      // Bireysel ders
+      studentId = lessonData['studentId'] ??
+          allStudents.firstWhere(
+                (s) => s['name'] == studentName,
+            orElse: () => {'parentId': 'unknown'},
+          )['parentId'];
+    }
+
+    // Devamsızlık bilgisini al
+    final attendanceDoc = await FirebaseFirestore.instance
+        .collection('lessons')
+        .doc(lesson.id)
+        .collection('attendances')
+        .doc(studentId)
+        .get();
+
+    if (attendanceDoc.exists) {
+      final data = attendanceDoc.data()!;
+      absences.add({
+        'date': (data['timestamp'] as Timestamp).toDate(),
+        'status': data['status'] ?? 'bilinmiyor',
+        'lessonBranch': lessonData['branch'] ?? 'Branş yok',
+        'teacherId': lessonData['teacherId'],
+        'teacherName': lessonData['teacherName'],
+        'studentId': studentId,
+        'isGroupLesson': isGroupLesson,
+        'lessonType': isGroupLesson ? 'Grup Dersi' : 'Bireysel Ders',
+      });
+    }
   }
 
   @override
@@ -163,7 +213,7 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
                     if (newValue != null) {
                       setState(() {
                         selectedStudentId = newValue;
-                        studentAbsences = []; // Clear absences while loading
+                        studentAbsences = [];
                       });
                       loadStudentAbsences(newValue);
                     }
@@ -178,12 +228,6 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
                 if (allStudents.isEmpty) {
                   return const Center(child: Text('Kayıtlı öğrenci bulunamadı.'));
                 }
-
-                if (studentAbsences.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Text("Devamsızlık bilgisi bulunamadı."),
-                  );
 
                 return ListView(
                   children: [
@@ -238,6 +282,10 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
                               Text(
                                 "Ders: ${entry['lessonBranch']}",
                                 style: TextStyle(color: Colors.blue[600]),
+                              ),
+                              Text(
+                                "Tip: ${entry['lessonType']}",
+                                style: TextStyle(color: Colors.blue[500]),
                               ),
                             ],
                           ),

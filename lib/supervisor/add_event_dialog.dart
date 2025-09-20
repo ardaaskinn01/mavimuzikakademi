@@ -28,6 +28,11 @@ class _AddEventDialogState extends State<AddEventDialog> {
   List<String> availableBranches = [];
   List<DocumentSnapshot> teachers = [];
 
+  // Yeni eklendi: Grup dersi için
+  bool isGroupLesson = false;
+  List<Map<String, dynamic>> selectedStudents = [];
+  List<String> selectedStudentNames = [];
+
   @override
   Widget build(BuildContext context) {
     final firestore = FirebaseFirestore.instance;
@@ -61,7 +66,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
                 teachers = teacherDocs;
                 return DropdownButtonFormField<String>(
                   decoration: const InputDecoration(labelText: 'Eğitmen Seç'),
-                  value: selectedTeacherId, // Bu satır eklendi
+                  value: selectedTeacherId,
                   items: teachers.map((doc) {
                     return DropdownMenuItem(
                       value: doc.id,
@@ -77,6 +82,8 @@ class _AddEventDialogState extends State<AddEventDialog> {
                       selectedStudentName = null;
                       filteredStudents = [];
                       isLoadingStudents = true;
+                      selectedStudents = [];
+                      selectedStudentNames = [];
                     });
 
                     final selectedDoc = teachers.firstWhere((t) => t.id == val);
@@ -88,11 +95,12 @@ class _AddEventDialogState extends State<AddEventDialog> {
                       final students = List<Map<String, dynamic>>.from(doc['students'] ?? []);
                       for (var student in students) {
                         final studentBranches = List<String>.from(student['branches'] ?? []);
+                        // Eğitmen ve öğrenci branşlarının en az birinin eşleşmesi gerekiyor
                         if (teacherBranches.any((branch) => studentBranches.contains(branch))) {
                           matchingStudents.add({
                             'parentId': doc.id,
                             'name': student['name'],
-                            'branches': student['branches'], // eklendi
+                            'branches': student['branches'],
                           });
                         }
                       }
@@ -145,7 +153,10 @@ class _AddEventDialogState extends State<AddEventDialog> {
                 }
 
                 final lessons = snapshot.data?.docs ?? [];
-                final reservedTimes = lessons
+                // Grup dersi ise dolu saatler de seçilebilsin
+                final reservedTimes = isGroupLesson
+                    ? <String>{}
+                    : lessons
                     .where((doc) {
                   final data = doc.data() as Map<String, dynamic>;
                   final lessonDate = (data['date'] as Timestamp).toDate();
@@ -178,9 +189,57 @@ class _AddEventDialogState extends State<AddEventDialog> {
               },
             ),
             const SizedBox(height: 10),
+            // Grup dersi seçimi için Checkbox
+            Row(
+              children: [
+                Checkbox(
+                  value: isGroupLesson,
+                  onChanged: (bool? value) {
+                    setState(() {
+                      isGroupLesson = value!;
+                      // Grup dersi seçimi değişince öğrenci seçimini sıfırla
+                      selectedStudents = [];
+                      selectedStudentNames = [];
+                      selectedStudentId = null;
+                      selectedStudentName = null;
+                    });
+                  },
+                ),
+                const Text("Grup Dersi"),
+              ],
+            ),
+            const SizedBox(height: 10),
             if (isLoadingStudents)
               const Center(child: CircularProgressIndicator())
+            else if (isGroupLesson)
+            // Grup dersi için öğrenci seçimi
+              TextFormField(
+                readOnly: true,
+                onTap: () async {
+                  final result = await _showMultiSelectDialog(
+                    context,
+                    filteredStudents,
+                    selectedStudents,
+                  );
+                  if (result != null) {
+                    setState(() {
+                      selectedStudents = result;
+                      selectedStudentNames =
+                          result.map((s) => s['name'] as String).toList();
+                      _updateAvailableBranches();
+                    });
+                  }
+                },
+                decoration: InputDecoration(
+                  labelText: selectedStudentNames.isEmpty
+                      ? 'Öğrenci(ler) Seç'
+                      : 'Seçilen Öğrenci: ${selectedStudentNames.join(", ")}',
+                  border: const OutlineInputBorder(),
+                  enabled: selectedTeacherId != null && filteredStudents.isNotEmpty,
+                ),
+              )
             else
+            // Bireysel ders için öğrenci seçimi
               DropdownButtonFormField<String>(
                 decoration: InputDecoration(
                   labelText: 'Öğrenci Seç',
@@ -194,29 +253,30 @@ class _AddEventDialogState extends State<AddEventDialog> {
                     child: Text(student['name']),
                   );
                 }).toList(),
-                  onChanged: (val) {
-                    if (val != null) {
-                      setState(() {
-                        final selected = filteredStudents.firstWhere(
-                              (s) => "${s['parentId']}_${s['name']}" == val,
-                        );
-                        selectedStudentId = selected['parentId'];
-                        selectedStudentName = selected['name'];
+                onChanged: (val) {
+                  if (val != null) {
+                    setState(() {
+                      final selected = filteredStudents.firstWhere(
+                            (s) => "${s['parentId']}_${s['name']}" == val,
+                      );
+                      selectedStudentId = selected['parentId'];
+                      selectedStudentName = selected['name'];
 
-                        // Ortak branşları bul
-                        final teacherDoc = teachers.firstWhere((t) => t.id == selectedTeacherId);
-                        final teacherBranches = List<String>.from(teacherDoc['branches'] ?? []);
-                        final studentBranches = List<String>.from(selected['branches'] ?? []);
-                        availableBranches = teacherBranches
-                            .where((b) => studentBranches.contains(b))
-                            .toList();
+                      // Tekil öğrenci için ortak branşları bul
+                      final teacherDoc = teachers.firstWhere((t) => t.id == selectedTeacherId);
+                      final teacherBranches = List<String>.from(teacherDoc['branches'] ?? []);
+                      final studentBranches = List<String>.from(selected['branches'] ?? []);
+                      availableBranches = teacherBranches
+                          .where((b) => studentBranches.contains(b))
+                          .toList();
 
-                        selectedBranch = null; // yeniden seçtirsin
-                      });
-                    }
+                      selectedBranch = null; // yeniden seçtirsin
+                    });
                   }
+                },
               ),
             const SizedBox(height: 10),
+            // Branş seçimi
             if (availableBranches.isNotEmpty)
               DropdownButtonFormField<String>(
                 decoration: const InputDecoration(labelText: 'Branş Seç'),
@@ -241,20 +301,20 @@ class _AddEventDialogState extends State<AddEventDialog> {
         ),
         ElevatedButton(
           onPressed: () async {
-            if (selectedTeacherId != null && selectedTime != null && selectedStudentId != null && selectedDay != null) {
+            if (selectedTeacherId != null && selectedTime != null && selectedDay != null &&
+                ((isGroupLesson && selectedStudents.isNotEmpty) || (!isGroupLesson && selectedStudentId != null))) {
               final teacherDoc = await firestore.collection('users').doc(selectedTeacherId).get();
               final teacherName = teacherDoc['name'];
-              final List<dynamic> branches = teacherDoc['branches'] ?? [];
-              final branch = branches.isNotEmpty ? branches[0] : null;
 
-              if (branch == null) {
+              if (selectedBranch == null) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text('Eğitmenin tanımlı bir branşı yok'),
+                    content: Text('Lütfen bir branş seçin.'),
                   ),
                 );
                 return;
               }
+
               final newDocRef = firestore.collection('lessons').doc();
               final event = {
                 'id': newDocRef.id,
@@ -263,11 +323,18 @@ class _AddEventDialogState extends State<AddEventDialog> {
                 'teacherId': selectedTeacherId,
                 'teacherName': teacherName,
                 'branch': selectedBranch,
-                'studentId': selectedStudentId,
-                'studentName': selectedStudentName,
                 'recurring': true,
                 'isMakeup': false,
+                'isGroupLesson': isGroupLesson,
               };
+
+              if (isGroupLesson) {
+                event['studentIds'] = selectedStudents.map((s) => s['parentId']).toList();
+                event['studentNames'] = selectedStudents.map((s) => s['name']).toList();
+              } else {
+                event['studentId'] = selectedStudentId;
+                event['studentName'] = selectedStudentName;
+              }
 
               await newDocRef.set(event);
               widget.onSave(selectedDay!, event);
@@ -283,6 +350,87 @@ class _AddEventDialogState extends State<AddEventDialog> {
           child: const Text('Kaydet'),
         ),
       ],
+    );
+  }
+
+  // Ortak branşları bulma fonksiyonu
+  void _updateAvailableBranches() {
+    if (selectedTeacherId == null || selectedStudents.isEmpty) {
+      setState(() {
+        availableBranches = [];
+        selectedBranch = null;
+      });
+      return;
+    }
+
+    final teacherDoc = teachers.firstWhere((t) => t.id == selectedTeacherId);
+    final teacherBranches = List<String>.from(teacherDoc['branches'] ?? []);
+
+    // Seçilen tüm öğrencilerin ortak branşlarını bul
+    List<String> commonBranches = List.from(teacherBranches);
+    for (var student in selectedStudents) {
+      final studentBranches = List<String>.from(student['branches'] ?? []);
+      commonBranches = commonBranches.where((b) => studentBranches.contains(b)).toList();
+    }
+
+    setState(() {
+      availableBranches = commonBranches;
+      // Eğer seçili branş artık mevcut değilse sıfırla
+      if (selectedBranch != null && !availableBranches.contains(selectedBranch)) {
+        selectedBranch = null;
+      }
+    });
+  }
+
+  // Çoklu öğrenci seçimi için pop-up
+  Future<List<Map<String, dynamic>>?> _showMultiSelectDialog(
+      BuildContext context,
+      List<Map<String, dynamic>> students,
+      List<Map<String, dynamic>> initialSelected,
+      ) async {
+    List<Map<String, dynamic>> tempSelected = List.from(initialSelected);
+
+    return showDialog<List<Map<String, dynamic>>>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) { // <-- Pop-up'ın kendi durumunu yöneten setState
+            return AlertDialog(
+              title: const Text('Öğrenci Seç'),
+              content: SingleChildScrollView(
+                child: ListBody(
+                  children: students.map((student) {
+                    final isSelected = tempSelected.any((s) => s['name'] == student['name'] && s['parentId'] == student['parentId']);
+                    return CheckboxListTile(
+                      title: Text(student['name']),
+                      value: isSelected,
+                      onChanged: (bool? selected) {
+                        setDialogState(() { // <-- pop-up'ın durumunu güncelliyor
+                          if (selected != null && selected) {
+                            tempSelected.add(student);
+                          } else {
+                            tempSelected.removeWhere((s) => s['name'] == student['name'] && s['parentId'] == student['parentId']);
+                          }
+                        });
+                      },
+                    );
+                  }).toList(),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, null),
+                  child: const Text('İptal'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, tempSelected),
+                  child: const Text('Tamam'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 }

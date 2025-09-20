@@ -30,8 +30,18 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
       );
     } on FirebaseAuthException catch (e) {
+      // 🔹 Debug log (konsola yazacak)
+      debugPrint("FirebaseAuthException code: ${e.code}");
+      debugPrint("FirebaseAuthException message: ${e.message}");
+
       setState(() {
-        errorMessage = e.message;
+        errorMessage = "Kod: ${e.code}\nMesaj: ${e.message}";
+      });
+    } catch (e) {
+      // 🔹 Beklenmeyen hata
+      debugPrint("Unexpected error: $e");
+      setState(() {
+        errorMessage = "Beklenmeyen hata: $e";
       });
     }
   }

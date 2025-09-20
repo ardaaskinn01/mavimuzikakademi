@@ -113,7 +113,7 @@ class _PaylasimlarScreenState extends State<PaylasimlarScreen> {
                       const SizedBox(height: 12),
                       ElevatedButton.icon(
                         onPressed: () async {
-                          final izinVar = await _isteDepoIzni();
+                          final izinVar = await _isteMedyaIzni();
                           if (!izinVar) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               const SnackBar(content: Text("Medya seçmek için depolama izni gerekli.")),
@@ -276,35 +276,37 @@ class _PaylasimlarScreenState extends State<PaylasimlarScreen> {
     );
   }
 
+  Future<bool> _isteMedyaIzni() async {
+    if (Platform.isAndroid) {
+      final androidVersion = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
+
+      if (androidVersion >= 33) {
+        // Android 13 ve sonrası için
+        final photosStatus = await Permission.photos.request();
+        final videosStatus = await Permission.videos.request();
+        return photosStatus.isGranted && videosStatus.isGranted;
+      } else {
+        // Android 12 ve öncesi için
+        final storageStatus = await Permission.storage.request();
+        return storageStatus.isGranted;
+      }
+    }
+    return true; // iOS için her zaman true döndür
+  }
+
   Future<bool> _isteBelgeIzni() async {
     if (Platform.isAndroid) {
       final androidVersion = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
 
-      if (androidVersion >= 29) {
-        // Android 10+ Scoped Storage kullanılıyor, FilePicker ile izin otomatik
+      if (androidVersion >= 33) {
         return true;
       } else {
-        // Android 9 ve öncesi
-        final status = await Permission.storage.request();
-        return status.isGranted;
+        // Android 12 ve öncesi için eski depolama izni yeterli
+        final storageStatus = await Permission.storage.request();
+        return storageStatus.isGranted;
       }
     }
-    return true; // iOS
-  }
-
-  Future<bool> _isteDepoIzni() async {
-    // Aynı şekilde medya için de izin artık gerekmiyor
-    if (Platform.isAndroid) {
-      final androidVersion = (await DeviceInfoPlugin().androidInfo).version.sdkInt;
-
-      if (androidVersion >= 29) {
-        return true; // FilePicker ile seçim yeterli
-      } else {
-        final status = await Permission.storage.request();
-        return status.isGranted;
-      }
-    }
-    return true; // iOS
+    return true; // iOS için her zaman true döndür
   }
 
   void _paylasimiSilSor(String docId) async {

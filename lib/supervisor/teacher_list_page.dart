@@ -5,6 +5,21 @@ import 'package:mavimuzikakademi/supervisor/reset_password_dialog.dart';
 import 'package:mavimuzikakademi/supervisor/teacher_stats_page.dart';
 import '../chat_screen.dart';
 
+// Branşlar listesi
+final List<String> allBranches = [
+  'Gitar',
+  'Piyano',
+  'Yan flüt',
+  'Keman',
+  'Ney',
+  'Bağlama',
+  'Müzikli drama',
+  'Solfej',
+  'Ukulele',
+  'Viyolonsel',
+  'Resim',
+];
+
 class TeacherListPage extends StatefulWidget {
   const TeacherListPage({super.key});
 
@@ -29,6 +44,114 @@ class _TeacherListPageState extends State<TeacherListPage> {
     setState(() {
       currentUserRole = doc.data()?['role'];
     });
+  }
+
+  // Branş düzenleme pop-up'ını gösteren fonksiyon
+  void _showEditBranchesDialog(DocumentSnapshot teacherDoc) {
+    final teacherData = teacherDoc.data() as Map<String, dynamic>;
+    final teacherName = teacherData['name'] ?? 'İsimsiz';
+    final branches = List<String>.from(teacherData['branches'] ?? []);
+
+    // Pop-up için seçili branşları tutan geçici bir liste
+    List<String> selectedBranches = List.from(branches);
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: Text(
+                "$teacherName Branşları Düzenle",
+                style: TextStyle(color: Colors.blue[900], fontWeight: FontWeight.bold),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Wrap(
+                      spacing: 8.0,
+                      runSpacing: 8.0,
+                      children: allBranches.map((branch) {
+                        final isSelected = selectedBranches.contains(branch);
+                        return FilterChip(
+                          label: Text(branch),
+                          selected: isSelected,
+                          onSelected: (selected) {
+                            setState(() {
+                              if (selected) {
+                                selectedBranches.add(branch);
+                              } else {
+                                selectedBranches.remove(branch);
+                              }
+                            });
+                          },
+                          selectedColor: Colors.blue[100],
+                          checkmarkColor: Colors.blue[900],
+                          labelStyle: TextStyle(
+                            color: isSelected ? Colors.blue[900] : Colors.blue[800],
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: Text(
+                    "İptal",
+                    style: TextStyle(color: Colors.blue[700]),
+                  ),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    _saveBranches(teacherDoc.id, selectedBranches);
+                    Navigator.pop(context);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue[700],
+                  ),
+                  child: const Text(
+                    "Kaydet",
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Firestore'da branşları güncelleyen fonksiyon
+  Future<void> _saveBranches(String teacherId, List<String> newBranches) async {
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(teacherId).update({
+        'branches': newBranches,
+      });
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Branşlar başarıyla güncellendi!"),
+            backgroundColor: Colors.green[600],
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Branşları güncellerken hata oluştu: $e"),
+            backgroundColor: Colors.red[600],
+          ),
+        );
+      }
+    }
   }
 
   @override
@@ -244,6 +367,15 @@ class _TeacherListPageState extends State<TeacherListPage> {
                               ],
                             ),
                           ),
+                          // Yeni eklenen düzenleme butonu
+                          if (currentUserRole == 'supervisor')
+                            IconButton(
+                              icon: Icon(Icons.edit, color: Colors.blue[700]),
+                              tooltip: "Branşları Düzenle",
+                              onPressed: () {
+                                _showEditBranchesDialog(doc);
+                              },
+                            ),
                           IconButton(
                             icon: Icon(Icons.bar_chart, color: Colors.blue[700]),
                             tooltip: "Ders İstatistikleri",
