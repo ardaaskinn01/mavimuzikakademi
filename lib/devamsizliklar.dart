@@ -17,10 +17,14 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
   int selectedMonth = DateTime.now().month;
   int selectedYear = DateTime.now().year;
 
-  // {virtualId: {studentId: status}}
   Map<String, Map<String, String>> attendanceStatus = {};
+  /// Kaydedilmemiş, sadece ekranda seçilmiş olanlar
+  Map<String, Map<String, String>> pendingAttendance = {};
   List<Map<String, dynamic>> allLessons = [];
   bool isLoading = true;
+
+  /// 🔹 hangi liste görünsün: false = kayıtsız, true = geçmiş (kayıtlı)
+  bool showPast = false;
 
   @override
   void initState() {
@@ -36,7 +40,6 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
       selectedYear = today.year;
     }
 
-    // Verileri başlangıçta yükle
     loadData();
   }
 
@@ -47,7 +50,6 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
 
     final lessons = await getFilteredLessons();
 
-    // Tüm dersler için devamsızlık durumlarını yükle
     for (var lesson in lessons) {
       final lessonId = lesson['virtualId'];
       final isGroupLesson = lesson.containsKey('isGroupLesson')
@@ -68,7 +70,8 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
   }
 
   Future<void> getUserRole() async {
-    final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+    final doc =
+    await FirebaseFirestore.instance.collection('users').doc(userId).get();
     setState(() {
       userRole = doc['role'];
     });
@@ -76,26 +79,28 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
 
   void setAttendance(String lessonId, String studentId, String status) {
     setState(() {
-      attendanceStatus[lessonId] ??= {};
-      attendanceStatus[lessonId]![studentId] = status;
+      pendingAttendance[lessonId] ??= {};
+      pendingAttendance[lessonId]![studentId] = status;
     });
   }
 
   Future<void> submitAttendance(
       String lessonId, String virtualId, DateTime occurrenceDate) async {
-    final lessonAttendance = attendanceStatus[virtualId];
+    final lessonAttendance = pendingAttendance[virtualId];
     if (lessonAttendance == null) return;
 
     final batch = FirebaseFirestore.instance.batch();
 
     for (var entry in lessonAttendance.entries) {
+      final studentId = entry.key;
       final docRef = FirebaseFirestore.instance
           .collection('lessons')
           .doc(lessonId)
           .collection('attendances')
-          .doc('${entry.key}_${DateFormat('yyyyMMdd').format(occurrenceDate)}');
+          .doc('${studentId}_${DateFormat('yyyyMMdd').format(occurrenceDate)}');
 
       batch.set(docRef, {
+        'studentId': studentId, // 🔹 eklendi
         'status': entry.value,
         'timestamp': Timestamp.now(),
         'occurrenceDate': Timestamp.fromDate(occurrenceDate),
@@ -109,7 +114,8 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
     );
 
     setState(() {
-      attendanceStatus.remove(virtualId);
+      attendanceStatus[virtualId] = Map.from(lessonAttendance);
+      pendingAttendance.remove(virtualId);
     });
   }
 
@@ -118,14 +124,11 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
         .collection('lessons')
         .orderBy('date', descending: true);
 
-    // Sadece öğretmenin kendi derslerini göster
     if (userRole == 'teacher') {
       query = query.where('teacherId', isEqualTo: userId);
     } else if (userRole == 'student') {
-      // Öğrenci ise kendi derslerini göster
       query = query.where('studentId', isEqualTo: userId);
     }
-    // Admin veya diğer roller için filtre uygulanmaz (tüm dersleri görür)
 
     final snapshot = await query.get();
 
@@ -142,25 +145,17 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
       final data = lesson.data() as Map<String, dynamic>;
       final baseDate = (data['date'] as Timestamp).toDate();
 
-      // Sadece kullanıcının yetkisi olan dersleri işle
       if (userRole == 'teacher' && data['teacherId'] != userId) {
-        continue; // Öğretmenin kendi dersi değilse atla
+        continue;
       }
 
       if (userRole == 'student') {
-        // Öğrenci için kontrol - bireysel ders mi grup dersi mi
         final isGroupLesson = data['isGroupLesson'] == true;
         if (isGroupLesson) {
-          // Grup dersi ise öğrenci listede mi kontrol et
           final studentIds = List<String>.from(data['studentIds'] ?? []);
-          if (!studentIds.contains(userId)) {
-            continue; // Öğrenci bu grupta değilse atla
-          }
+          if (!studentIds.contains(userId)) continue;
         } else {
-          // Bireysel ders ise öğrenci eşleşmeli
-          if (data['studentId'] != userId) {
-            continue; // Öğrencinin dersi değilse atla
-          }
+          if (data['studentId'] != userId) continue;
         }
       }
 
@@ -169,7 +164,8 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
         while (currentDate.isBefore(now)) {
           expandedLessons.add({
             ...data,
-            'virtualId': '${lesson.id}_${DateFormat('yyyyMMdd').format(currentDate)}',
+            'virtualId':
+            '${lesson.id}_${DateFormat('yyyyMMdd').format(currentDate)}',
             'lessonId': lesson.id,
             'date': Timestamp.fromDate(currentDate),
           });
@@ -194,28 +190,25 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
     return expandedLessons;
   }
 
-  // Önceden kaydedilmiş devamsızlık durumlarını yükle
-  Future<void> loadExistingAttendance(String lessonId, String virtualId, List<String> studentIds) async {
+  Future<void> loadExistingAttendance(
+      String lessonId, String virtualId, List<String> studentIds) async {
     try {
+      final datePart = virtualId.split('_').last; // yyyyMMdd kısmı
       final attendanceSnapshot = await FirebaseFirestore.instance
           .collection('lessons')
           .doc(lessonId)
           .collection('attendances')
+          .where(FieldPath.documentId, whereIn: studentIds.map((id) => '${id}_$datePart').toList())
           .get();
 
       final existingAttendance = <String, String>{};
 
       for (var attDoc in attendanceSnapshot.docs) {
-        for (var studentId in studentIds) {
-          // Doküman ID'si studentId ve tarih içeriyorsa
-          if (attDoc.id.startsWith('${studentId}_')) {
-            final attData = attDoc.data();
-            existingAttendance[studentId] = attData['status'] ?? 'unknown';
-          }
-        }
+        final studentId = studentIds.firstWhere((id) => attDoc.id.startsWith(id));
+        existingAttendance[studentId] = attDoc.data()['status'] ?? 'unknown';
       }
 
-      if (existingAttendance.isNotEmpty) {
+      if (existingAttendance.isNotEmpty && mounted) {
         setState(() {
           attendanceStatus[virtualId] = existingAttendance;
         });
@@ -230,119 +223,74 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
     if (userRole == null || isLoading) {
       return Scaffold(
         backgroundColor: Colors.blue[50],
-        appBar: AppBar(
-          title: const Text('Devamsızlıklar',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          centerTitle: true,
-          backgroundColor: Colors.blue[800],
-          elevation: 10,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-          ),
-          iconTheme: const IconThemeData(color: Colors.white),
-          actions: [
-            DropdownButton<int>(
-              value: selectedMonth,
-              dropdownColor: Colors.blue[700],
-              icon: const Icon(Icons.calendar_month, color: Colors.white),
-              underline: const SizedBox(),
-              items: List.generate(12, (index) {
-                final month = index + 1;
-                return DropdownMenuItem(
-                  value: month,
-                  child: Text(
-                    DateFormat('MMMM', 'tr_TR').format(DateTime(0, month)),
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                );
-              }),
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() {
-                    selectedMonth = value;
-                    loadData(); // Ay değiştiğinde verileri yeniden yükle
-                  });
-                }
-              },
-            ),
-          ],
-        ),
+        appBar: _buildAppBar(),
         body: Center(
-            child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[700]!))),
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[700]!),
+          ),
+        ),
       );
     }
 
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        backgroundColor: Colors.blue[50],
-        appBar: AppBar(
-          title: const Text('Devamsızlıklar',
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-          centerTitle: true,
-          backgroundColor: Colors.blue[800],
-          elevation: 10,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-          ),
-          iconTheme: const IconThemeData(color: Colors.white),
-          bottom: TabBar(
-            indicatorColor: Colors.white,
-            indicatorWeight: 3,
-            labelStyle: TextStyle(fontWeight: FontWeight.bold),
-            tabs: [
-              Tab(
-                icon: Icon(Icons.check_circle, size: 20),
-                text: 'Kayıtlı Dersler',
-              ),
-              Tab(
-                icon: Icon(Icons.pending_actions, size: 20),
-                text: 'Kayıtsız Dersler',
-              ),
-            ],
-          ),
-          actions: [
-            DropdownButton<int>(
-              value: selectedMonth,
-              dropdownColor: Colors.blue[700],
-              icon: const Icon(Icons.calendar_month, color: Colors.white),
-              underline: const SizedBox(),
-              items: List.generate(12, (index) {
-                final month = index + 1;
-                return DropdownMenuItem(
-                  value: month,
-                  child: Text(
-                    DateFormat('MMMM', 'tr_TR').format(DateTime(0, month)),
-                    style: const TextStyle(color: Colors.white),
-                  ),
-                );
-              }),
-              onChanged: (value) {
-                if (value != null) {
-                  setState(() {
-                    selectedMonth = value;
-                    loadData(); // Ay değiştiğinde verileri yeniden yükle
-                  });
-                }
-              },
-            ),
-          ],
-        ),
-        body: TabBarView(
-          children: [
-            // Kayıtlı Dersler Tab
-            _buildKayitliDerslerTab(),
-
-            // Kayıtsız Dersler Tab
-            _buildKayitsizDerslerTab(),
-          ],
-        ),
-      ),
+    return Scaffold(
+      backgroundColor: Colors.blue[50],
+      appBar: _buildAppBar(),
+      body: showPast ? _buildKayitliDersler() : _buildKayitsizDersler(),
     );
   }
 
-  Widget _buildKayitliDerslerTab() {
+  AppBar _buildAppBar() {
+    return AppBar(
+      title: const Text(
+        'Devamsızlıklar',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      ),
+      centerTitle: true,
+      backgroundColor: Colors.blue[800],
+      elevation: 10,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+      ),
+      iconTheme: const IconThemeData(color: Colors.white),
+      actions: [
+        IconButton(
+          icon: Icon(showPast ? Icons.pending_actions : Icons.history),
+          tooltip: showPast ? "Kayıtsızları Göster" : "Geçmişi Göster",
+          onPressed: () {
+            setState(() {
+              showPast = !showPast;
+            });
+          },
+        ),
+        DropdownButton<int>(
+          value: selectedMonth,
+          dropdownColor: Colors.blue[700],
+          icon: const Icon(Icons.calendar_month, color: Colors.white),
+          underline: const SizedBox(),
+          items: List.generate(12, (index) {
+            final month = index + 1;
+            return DropdownMenuItem(
+              value: month,
+              child: Text(
+                DateFormat('MMMM', 'tr_TR').format(DateTime(0, month)),
+                style: const TextStyle(color: Colors.white),
+              ),
+            );
+          }),
+          onChanged: (value) {
+            if (value != null) {
+              setState(() {
+                selectedMonth = value;
+                loadData();
+              });
+            }
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildKayitliDersler() {
     final kayitliLessons = allLessons.where((lesson) {
       final virtualId = lesson['virtualId'];
       return attendanceStatus.containsKey(virtualId) &&
@@ -350,35 +298,18 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
     }).toList();
 
     if (kayitliLessons.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.check_circle_outline, size: 64, color: Colors.blue[300]),
-            SizedBox(height: 16),
-            Text(
-              'Kayıtlı ders bulunmuyor',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.blue[700],
-              ),
-            ),
-          ],
-        ),
-      );
+      return _emptyState("Kayıtlı ders bulunmuyor", Icons.check_circle_outline);
     }
 
     return RefreshIndicator(
       onRefresh: loadData,
       child: ListView(
-        children: [
-          ...kayitliLessons.map((lesson) => buildLessonCard(lesson)),
-        ],
+        children: kayitliLessons.map((lesson) => buildLessonCard(lesson)).toList(),
       ),
     );
   }
 
-  Widget _buildKayitsizDerslerTab() {
+  Widget _buildKayitsizDersler() {
     final kayitsizLessons = allLessons.where((lesson) {
       final virtualId = lesson['virtualId'];
       return !attendanceStatus.containsKey(virtualId) ||
@@ -386,42 +317,40 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
     }).toList();
 
     if (kayitsizLessons.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.assignment_turned_in, size: 64, color: Colors.blue[300]),
-            SizedBox(height: 16),
-            Text(
-              'Tüm dersler kaydedilmiş',
-              style: TextStyle(
-                fontSize: 16,
-                color: Colors.blue[700],
-              ),
-            ),
-          ],
-        ),
-      );
+      return _emptyState("Tüm dersler kaydedilmiş", Icons.assignment_turned_in);
     }
 
     return RefreshIndicator(
       onRefresh: loadData,
       child: ListView(
+        children: kayitsizLessons.map((lesson) => buildLessonCard(lesson)).toList(),
+      ),
+    );
+  }
+
+  Widget _emptyState(String message, IconData icon) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          ...kayitsizLessons.map((lesson) => buildLessonCard(lesson)),
+          Icon(icon, size: 64, color: Colors.blue[300]),
+          const SizedBox(height: 16),
+          Text(
+            message,
+            style: TextStyle(fontSize: 16, color: Colors.blue[700]),
+          ),
         ],
       ),
     );
   }
 
   Widget buildLessonCard(Map<String, dynamic> lesson) {
-    final lessonId = lesson['virtualId'];
+    final lessonId = lesson['lessonId'];
+    final virtualId = lesson['virtualId'];
     final date = (lesson['date'] as Timestamp).toDate();
     final formattedDate = DateFormat('dd MMMM yyyy', 'tr_TR').format(date);
 
-    final isGroupLesson = lesson.containsKey('isGroupLesson')
-        ? (lesson['isGroupLesson'] as bool? ?? false)
-        : false;
+    final isGroupLesson = lesson['isGroupLesson'] == true;
 
     final studentIds = isGroupLesson
         ? List<String>.from(lesson['studentIds'] ?? [])
@@ -488,7 +417,6 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
               Divider(color: Colors.blue[100], thickness: 1),
               const SizedBox(height: 4),
 
-              // 🔹 Öğrenciler listesi
               for (int i = 0; i < studentIds.length; i++)
                 Container(
                   margin: const EdgeInsets.only(bottom: 6),
@@ -497,8 +425,7 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
                     color: Colors.blue[50],
                   ),
                   child: ListTile(
-                    contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 10),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 10),
                     title: Text(
                       studentNames[i],
                       style: TextStyle(
@@ -514,25 +441,27 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
                           icon: Icon(
                             Icons.check_circle,
                             size: 22,
-                            color:
-                            attendanceStatus[lessonId]?[studentIds[i]] == 'var'
+                            color: (pendingAttendance[virtualId]?[studentIds[i]] ??
+                                attendanceStatus[virtualId]?[studentIds[i]]) ==
+                                'var'
                                 ? Colors.green[700]
                                 : Colors.grey[400],
                           ),
                           onPressed: () =>
-                              setAttendance(lessonId, studentIds[i], 'var'),
+                              setAttendance(virtualId, studentIds[i], 'var'),
                         ),
                         IconButton(
                           icon: Icon(
                             Icons.cancel,
                             size: 22,
-                            color:
-                            attendanceStatus[lessonId]?[studentIds[i]] == 'yok'
+                            color: (pendingAttendance[virtualId]?[studentIds[i]] ??
+                                attendanceStatus[virtualId]?[studentIds[i]]) ==
+                                'yok'
                                 ? Colors.red[700]
                                 : Colors.grey[400],
                           ),
                           onPressed: () =>
-                              setAttendance(lessonId, studentIds[i], 'yok'),
+                              setAttendance(virtualId, studentIds[i], 'yok'),
                         ),
                         const SizedBox(width: 4),
                         SizedBox(
@@ -540,29 +469,32 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
                           child: TextButton(
                             style: TextButton.styleFrom(
                               backgroundColor:
-                              attendanceStatus[lessonId]?[studentIds[i]] ==
+                              (pendingAttendance[virtualId]?[studentIds[i]] ??
+                                  attendanceStatus[virtualId]
+                                  ?[studentIds[i]]) ==
                                   'izinli'
                                   ? Colors.amber[600]
                                   : Colors.grey[300],
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(6),
                               ),
-                              padding:
-                              const EdgeInsets.symmetric(vertical: 2),
+                              padding: const EdgeInsets.symmetric(vertical: 2),
                             ),
                             child: Text(
                               'İzinli',
                               style: TextStyle(
                                 fontSize: 12,
-                                color:
-                                attendanceStatus[lessonId]?[studentIds[i]] ==
+                                color: (pendingAttendance[virtualId]
+                                ?[studentIds[i]] ??
+                                    attendanceStatus[virtualId]
+                                    ?[studentIds[i]]) ==
                                     'izinli'
                                     ? Colors.black
                                     : Colors.grey[700],
                               ),
                             ),
-                            onPressed: () => setAttendance(
-                                lessonId, studentIds[i], 'izinli'),
+                            onPressed: () =>
+                                setAttendance(virtualId, studentIds[i], 'izinli'),
                           ),
                         ),
                       ],
@@ -582,8 +514,8 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
                     padding: const EdgeInsets.symmetric(vertical: 10),
                   ),
                   onPressed: () => submitAttendance(
-                    lesson['lessonId'],
-                    lesson['virtualId'],
+                    lessonId,
+                    virtualId,
                     (lesson['date'] as Timestamp).toDate(),
                   ),
                   child: const Text(

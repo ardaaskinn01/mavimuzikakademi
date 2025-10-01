@@ -2,6 +2,44 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 
+// Öğrenci devamsızlık durumu sınıfı
+class StudentAttendance {
+  final String studentName;
+  final String status;
+  final Color statusColor;
+  final String statusText;
+
+  StudentAttendance(this.studentName, this.status)
+      : statusColor = _getStatusColor(status),
+        statusText = _getStatusText(status);
+
+  static Color _getStatusColor(String status) {
+    switch (status) {
+      case 'var':
+        return const Color(0xFF2E7D32);
+      case 'yok':
+        return const Color(0xFFC62828);
+      case 'izinli':
+        return const Color(0xFFEF6C00);
+      default:
+        return const Color(0xFF455A64);
+    }
+  }
+
+  static String _getStatusText(String status) {
+    switch (status) {
+      case 'var':
+        return 'Geldi';
+      case 'yok':
+        return 'Gelmedi';
+      case 'izinli':
+        return 'İzinli';
+      default:
+        return 'Bilinmiyor';
+    }
+  }
+}
+
 class TeacherStatsPage extends StatefulWidget {
   final String teacherId;
   const TeacherStatsPage({Key? key, required this.teacherId}) : super(key: key);
@@ -18,6 +56,7 @@ class _TeacherStatsPageState extends State<TeacherStatsPage> {
   @override
   void initState() {
     super.initState();
+    Intl.defaultLocale = 'tr_TR';
     _fetchStatsAndDetails();
   }
 
@@ -29,73 +68,144 @@ class _TeacherStatsPageState extends State<TeacherStatsPage> {
         .get();
 
     Map<String, Map<String, int>> tempStats = {};
-    Map<String, List<Map<String, dynamic>>> tempDetails = {};
+    Map<String, Map<String, dynamic>> groupedLessons = {};
 
     for (var lessonDoc in lessonsSnap.docs) {
       final lessonData = lessonDoc.data();
-      final Timestamp? ts = lessonData['date'];
-      if (ts == null) continue;
+      final lessonId = lessonDoc.id;
 
-      final date = ts.toDate();
-      final monthKey = DateFormat('yyyy-MM').format(date);
-      final formattedDate = DateFormat('dd MMMM yyyy', 'tr_TR').format(date);
-      final formattedTime = lessonData['time'] ?? 'Bilinmiyor';
+      // Öğrenci Adlarını ve Grup Ders Durumunu Belirleme
+      List<dynamic> studentNamesArray;
+      final bool isGroupLessonFromData = lessonData['isGroupLesson'] ?? false;
 
-      tempStats.putIfAbsent(
-        monthKey,
-            () => {"var": 0, "yok": 0, "izinli": 0, "bilgiYok": 0},
-      );
-      tempDetails.putIfAbsent(monthKey, () => []);
-
-      final attendanceSnap = await lessonDoc.reference.collection('attendances').get();
-
-      if (attendanceSnap.docs.isEmpty) {
-        tempStats[monthKey]!["bilgiYok"] = tempStats[monthKey]!["bilgiYok"]! + 1;
-        tempDetails[monthKey]!.add({
-          'studentName': lessonData['studentName'] ?? 'Bilinmiyor',
-          'teacherName': lessonData['teacherName'] ?? 'Bilinmiyor',
-          'branch': lessonData['branch'] ?? 'Bilinmiyor',
-          'date': date, // Sıralama için tam tarih objesini kullan
-          'formattedDate': formattedDate,
-          'time': formattedTime,
-          'status': 'bilgi yok',
-        });
+      if (lessonData.containsKey('studentNames')) {
+        studentNamesArray = lessonData['studentNames'] as List<dynamic>;
+      } else if (lessonData.containsKey('studentName') && lessonData['studentName'] is String) {
+        studentNamesArray = [lessonData['studentName']];
       } else {
-        for (var attDoc in attendanceSnap.docs) {
-          final attData = attDoc.data();
-          final status = attData['status'] ?? 'bilgiYok';
+        studentNamesArray = [];
+      }
 
-          if (status == "izinli") {
-            tempStats[monthKey]!["izinli"] = tempStats[monthKey]!["izinli"]! + 1;
-          } else if (status == "var") {
-            tempStats[monthKey]!["var"] = tempStats[monthKey]!["var"]! + 1;
-          } else if (status == "yok") {
-            tempStats[monthKey]!["yok"] = tempStats[monthKey]!["yok"]! + 1;
-          } else {
-            tempStats[monthKey]!["bilgiYok"] = tempStats[monthKey]!["bilgiYok"]! + 1;
+      final bool isGroupLesson = isGroupLessonFromData || (studentNamesArray.length > 1);
+
+      final Timestamp? initialDateTs = lessonData['date'];
+      if (initialDateTs == null) continue;
+      final initialDate = initialDateTs.toDate();
+      final formattedTime = lessonData['time'] ?? 'Bilinmiyor';
+      final bool isRecurring = lessonData['recurring'] ?? false;
+
+      final attendanceSnap =
+      await lessonDoc.reference.collection('attendances').get();
+
+      // Kayıtlı devamsızlıkları uniqueKey (lessonId-YYYY-MM-DD) bazında gruplandır
+      Map<String, List<StudentAttendance>> recordedAttendances = {};
+
+      // Kayıtlı devamsızlıkları işleme ve aylık istatistikleri güncelleme
+      for (var attDoc in attendanceSnap.docs) {
+        final attData = attDoc.data();
+        final status = attData['status'] ?? 'bilgiYok';
+        final occTs = attData['occurrenceDate'] as Timestamp?;
+        // Devamsızlık kaydının tarihini kullan
+        final occDate = occTs?.toDate() ?? initialDate;
+        final attStudentName = attData['studentName'] ?? 'Bilinmiyor';
+
+        // Aylık istatistikleri güncelle (Sadece kayıtlı olanlar)
+        final monthKey = DateFormat('yyyy-MM').format(occDate);
+        tempStats.putIfAbsent(
+          monthKey,
+              () => {"var": 0, "yok": 0, "izinli": 0, "bilgiYok": 0},
+        );
+        tempStats[monthKey]![status] = tempStats[monthKey]![status]! + 1;
+
+        // Kayıtlı devamsızlıkları uniqueKey ile gruplandır
+        final uniqueKey = '$lessonId-${DateFormat('yyyy-MM-dd').format(occDate)}';
+        recordedAttendances.putIfAbsent(uniqueKey, () => []);
+        recordedAttendances[uniqueKey]!.add(StudentAttendance(attStudentName, status));
+      }
+
+      // Tarih Tekrarlarını Hesaplama ve Liste Oluşturma
+      // Bu döngü hem tek seferlik hem de tekrar eden dersler için çalışır.
+      DateTime currentDate = initialDate;
+      final today = DateTime.now();
+
+      // Tek seferlik dersler için sadece başlangıç tarihini kontrol et.
+      // Tekrarlayan dersler için bugüne kadar olan tüm haftalık tekrarları kontrol et.
+      while (currentDate.isBefore(today.add(const Duration(days: 1)))) {
+        final occDate = currentDate;
+        final uniqueKey = '$lessonId-${DateFormat('yyyy-MM-dd').format(occDate)}';
+        final monthKey = DateFormat('yyyy-MM').format(occDate);
+        final occFormattedDate = DateFormat('dd MMMM yyyy', 'tr_TR').format(occDate);
+
+        // 1. Ders tekrarı için kayıtlı devamsızlık var mı?
+        if (recordedAttendances.containsKey(uniqueKey)) {
+          // Kayıtlı devamsızlık varsa, groupedLessons'a ekle (Zaten istatistiği güncellendi)
+          if (!groupedLessons.containsKey(uniqueKey)) {
+            groupedLessons[uniqueKey] = {
+              'lessonId': lessonId,
+              'studentNames': studentNamesArray,
+              'teacherName': lessonData['teacherName'] ?? 'Bilinmiyor',
+              'branch': lessonData['branch'] ?? 'Bilinmiyor',
+              'date': occDate,
+              'formattedDate': occFormattedDate,
+              'time': formattedTime,
+              'isGroupLesson': isGroupLesson,
+              'attendances': recordedAttendances[uniqueKey]!,
+            };
           }
-
-          tempDetails[monthKey]!.add({
-            'studentName': lessonData['studentName'] ?? 'Bilinmiyor',
-            'teacherName': lessonData['teacherName'] ?? 'Bilinmiyor',
-            'branch': lessonData['branch'] ?? 'Bilinmiyor',
-            'date': date, // Sıralama için tam tarih objesini kullan
-            'formattedDate': formattedDate,
-            'time': formattedTime,
-            'status': status,
-          });
         }
+        // 2. Kayıtlı devamsızlık yoksa ve bu tarih bugünden önceyse 'Bilgi Yok' olarak ekle.
+        else if (occDate.isBefore(today)) {
+          // İstatistikleri güncelle (Sadece Bilgi Yok statüsü için)
+          tempStats.putIfAbsent(
+            monthKey,
+                () => {"var": 0, "yok": 0, "izinli": 0, "bilgiYok": 0},
+          );
+          tempStats[monthKey]!["bilgiYok"] = tempStats[monthKey]!["bilgiYok"]! + studentNamesArray.length;
+
+          // Ders detayını Bilgi Yok olarak oluştur ve ekle
+          if (!groupedLessons.containsKey(uniqueKey)) {
+            groupedLessons[uniqueKey] = {
+              'lessonId': lessonId,
+              'studentNames': studentNamesArray,
+              'teacherName': lessonData['teacherName'] ?? 'Bilinmiyor',
+              'branch': lessonData['branch'] ?? 'Bilinmiyor',
+              'date': occDate,
+              'formattedDate': occFormattedDate,
+              'time': formattedTime,
+              'isGroupLesson': isGroupLesson,
+              'attendances': studentNamesArray
+                  .map((name) => StudentAttendance(name.toString(), 'bilgiYok'))
+                  .toList(),
+            };
+          }
+        }
+
+        // Tekrar eden ders değilse, döngüyü kır (sadece 1 ders tekrarı işlendi)
+        if (!isRecurring) break;
+
+        // Sonraki haftaya geç
+        currentDate = currentDate.add(const Duration(days: 7));
       }
     }
 
-    // Her ayın ders detaylarını tarihe göre sırala (en eskiden en yeniye)
-    tempDetails.forEach((monthKey, lessons) {
-      lessons.sort((a, b) => (a['date'] as DateTime).compareTo(b['date'] as DateTime));
+    // Gruplanmış ders detaylarını aylara göre sonlandırma
+    Map<String, List<Map<String, dynamic>>> finalDetails = {};
+    groupedLessons.forEach((key, lessonDetail) {
+      final monthKey = DateFormat('yyyy-MM').format(lessonDetail['date']);
+      finalDetails.putIfAbsent(monthKey, () => []);
+      finalDetails[monthKey]!.add(lessonDetail);
+    });
+
+    finalDetails.forEach((monthKey, lessons) {
+      lessons.sort(
+            (a, b) => (b['date'] as DateTime).compareTo(a['date'] as DateTime),
+      );
     });
 
     setState(() {
-      monthlyStats = tempStats.map((key, value) => MapEntry(key, value.cast<String, dynamic>()));
-      monthlyDetails = tempDetails;
+      monthlyStats = tempStats.map(
+              (key, value) => MapEntry(key, value.cast<String, dynamic>()));
+      monthlyDetails = finalDetails;
       _loading = false;
     });
   }
@@ -132,7 +242,8 @@ class _TeacherStatsPageState extends State<TeacherStatsPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.assignment_outlined, size: 60, color: Colors.blueGrey[300]),
+            Icon(Icons.assignment_outlined,
+                size: 60, color: Colors.blueGrey[300]),
             const SizedBox(height: 16),
             Text(
               "Devamsızlık kaydı bulunamadı",
@@ -158,7 +269,8 @@ class _TeacherStatsPageState extends State<TeacherStatsPage> {
           children: sortedMonths.map((monthKey) {
             final stats = monthlyStats[monthKey]!;
             final isCurrentMonth = monthKey == nowKey;
-            final monthName = DateFormat('MMMM yyyy', 'tr_TR').format(DateFormat('yyyy-MM').parse(monthKey));
+            final monthName = DateFormat('MMMM yyyy', 'tr_TR')
+                .format(DateFormat('yyyy-MM').parse(monthKey));
 
             return Card(
               margin: const EdgeInsets.all(12),
@@ -170,7 +282,8 @@ class _TeacherStatsPageState extends State<TeacherStatsPage> {
                 borderRadius: BorderRadius.circular(16),
                 child: ExpansionTile(
                   initiallyExpanded: isCurrentMonth,
-                  tilePadding: const EdgeInsets.symmetric(horizontal: 20),
+                  tilePadding:
+                  const EdgeInsets.symmetric(horizontal: 20),
                   collapsedBackgroundColor: Colors.white,
                   backgroundColor: Colors.white,
                   title: Text(
@@ -178,140 +291,53 @@ class _TeacherStatsPageState extends State<TeacherStatsPage> {
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       fontSize: 16,
-                      color: isCurrentMonth ? const Color(0xFF0D47A1) : Colors.black87,
+                      color: isCurrentMonth
+                          ? const Color(0xFF0D47A1)
+                          : Colors.black87,
                     ),
                   ),
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 16, horizontal: 8),
                       decoration: BoxDecoration(
                         color: Colors.blue[50],
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      margin: const EdgeInsets.symmetric(horizontal: 16),
+                      margin:
+                      const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        mainAxisAlignment:
+                        MainAxisAlignment.spaceAround,
                         children: [
-                          _statBox("Geldi", stats["var"] as int, const Color(0xFF2E7D32)),
-                          _statBox("Gelmedi", stats["yok"] as int, const Color(0xFFC62828)),
-                          _statBox("İzinli", stats["izinli"] as int, const Color(0xFFEF6C00)),
-                          _statBox("Bilgi Yok", stats["bilgiYok"] as int, const Color(0xFF455A64)),
+                          _statBox("Geldi", stats["var"] as int,
+                              const Color(0xFF2E7D32)),
+                          _statBox("Gelmedi", stats["yok"] as int,
+                              const Color(0xFFC62828)),
+                          _statBox("İzinli", stats["izinli"] as int,
+                              const Color(0xFFEF6C00)),
+                          _statBox("Bilgi Yok",
+                              stats["bilgiYok"] as int,
+                              const Color(0xFF455A64)),
                         ],
                       ),
                     ),
                     const SizedBox(height: 16),
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      child: GridView.builder(
+                      padding:
+                      const EdgeInsets.symmetric(horizontal: 12),
+                      child: ListView.builder(
                         shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                          childAspectRatio: 0.85,
-                        ),
+                        physics:
+                        const NeverScrollableScrollPhysics(),
                         itemCount: monthlyDetails[monthKey]!.length,
                         itemBuilder: (context, index) {
-                          final details = monthlyDetails[monthKey]![index];
-                          Color statusColor;
-                          String statusText;
-
-                          switch (details['status']) {
-                            case 'var':
-                              statusColor = const Color(0xFF2E7D32);
-                              statusText = 'Geldi';
-                              break;
-                            case 'yok':
-                              statusColor = const Color(0xFFC62828);
-                              statusText = 'Gelmedi';
-                              break;
-                            case 'izinli':
-                              statusColor = const Color(0xFFEF6C00);
-                              statusText = 'İzinli';
-                              break;
-                            default:
-                              statusColor = const Color(0xFF455A64);
-                              statusText = 'Bilinmiyor';
-                          }
-
-                          return Container(
-                            decoration: BoxDecoration(
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.blueGrey.withOpacity(0.1),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: Card(
-                              elevation: 0,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(16),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(12),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: statusColor.withOpacity(0.1),
-                                        borderRadius: BorderRadius.circular(20),
-                                      ),
-                                      child: Text(
-                                        statusText,
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.bold,
-                                          color: statusColor,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(height: 12),
-                                    Text(
-                                      details['studentName'],
-                                      style: const TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        color: Colors.black87,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    const SizedBox(height: 8),
-                                    _detailRow(
-                                      Icons.person_outline,
-                                      'Öğretmen: ${details['teacherName']}',
-                                      Colors.blueGrey,
-                                    ),
-                                    const SizedBox(height: 4),
-                                    _detailRow(
-                                      Icons.category_outlined,
-                                      'Branş: ${details['branch']}',
-                                      Colors.blueGrey,
-                                    ),
-                                    const SizedBox(height: 12),
-                                    const Divider(height: 1, color: Colors.black12),
-                                    const SizedBox(height: 12),
-                                    _detailRow(
-                                      Icons.calendar_today_outlined,
-                                      details['formattedDate'],
-                                      const Color(0xFF1976D2),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    _detailRow(
-                                      Icons.access_time_outlined,
-                                      details['time'],
-                                      const Color(0xFF1976D2),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
+                          final details =
+                          monthlyDetails[monthKey]![index];
+                          return Padding(
+                            padding:
+                            const EdgeInsets.only(bottom: 12),
+                            child: _buildDetailsCard(details),
                           );
                         },
                       ),
@@ -322,6 +348,133 @@ class _TeacherStatsPageState extends State<TeacherStatsPage> {
               ),
             );
           }).toList(),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailsCard(Map<String, dynamic> details) {
+    final List<StudentAttendance> attendances =
+    details['attendances'] as List<StudentAttendance>;
+    final bool isGroupLesson = details['isGroupLesson'] as bool ?? false;
+    final List<dynamic> studentNames = details['studentNames'] ?? [];
+
+    // Bireysel derslerde tek öğrenci adı
+    final String lessonTitle = !isGroupLesson && studentNames.isNotEmpty
+        ? studentNames.first.toString()
+        : 'Grup Dersi';
+
+    StudentAttendance? singleAttendance =
+    (!isGroupLesson && attendances.length == 1) ? attendances.first : null;
+
+    Color statusColor = singleAttendance?.statusColor ?? const Color(0xFF1976D2);
+    String statusText = singleAttendance?.statusText ?? 'Grup Dersi';
+
+    if (singleAttendance != null && !isGroupLesson) {
+      statusColor = singleAttendance.statusColor;
+      statusText = singleAttendance.statusText;
+    } else if (isGroupLesson && attendances.isNotEmpty) {
+      statusColor = attendances.first.statusColor;
+      statusText = attendances.first.statusText;
+    }
+
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              decoration: BoxDecoration(
+                color: statusColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                statusText,
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: statusColor,
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              lessonTitle,
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: Colors.black87,
+              ),
+              maxLines: isGroupLesson ? 2 : 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 8),
+            _detailRow(Icons.person_outline,
+                'Öğretmen: ${details['teacherName']}', Colors.blueGrey),
+            const SizedBox(height: 4),
+            _detailRow(Icons.category_outlined,
+                'Branş: ${details['branch']}', Colors.blueGrey),
+            const SizedBox(height: 12),
+            const Divider(height: 1, color: Colors.black12),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: _detailRow(Icons.calendar_today_outlined,
+                      details['formattedDate'], const Color(0xFF1976D2)),
+                ),
+                const SizedBox(width: 16),
+                Flexible(
+                  child: _detailRow(Icons.access_time_outlined,
+                      details['time'], const Color(0xFF1976D2)),
+                ),
+              ],
+            ),
+            if (isGroupLesson && attendances.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const Text(
+                'Öğrenci Statüleri:',
+                style: TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.bold, color: Colors.black87),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8.0,
+                runSpacing: 4.0,
+                children: List.generate(studentNames.length, (index) {
+                  final name = studentNames[index].toString();
+                  final att = attendances.length > index ? attendances[index] : null;
+                  final attStatusText = att?.statusText ?? 'Bilinmiyor';
+                  final attStatusColor = att?.statusColor ?? const Color(0xFF455A64);
+
+                  return Chip(
+                    label: Text(
+                      '$name: $attStatusText',
+                      style: TextStyle(
+                          fontSize: 12,
+                          color: attStatusColor,
+                          fontWeight: FontWeight.bold),
+                    ),
+                    backgroundColor: attStatusColor.withOpacity(0.1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: BorderSide(
+                          color: attStatusColor.withOpacity(0.3), width: 1),
+                    ),
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                  );
+                }),
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -341,22 +494,14 @@ class _TeacherStatsPageState extends State<TeacherStatsPage> {
           child: Center(
             child: Text(
               count.toString(),
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: color,
-              ),
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: color),
             ),
           ),
         ),
         const SizedBox(height: 6),
         Text(
           label,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.blueGrey[700],
-            fontWeight: FontWeight.w500,
-          ),
+          style: TextStyle(fontSize: 12, color: Colors.blueGrey[700], fontWeight: FontWeight.w500),
         ),
       ],
     );
@@ -369,13 +514,7 @@ class _TeacherStatsPageState extends State<TeacherStatsPage> {
         Icon(icon, size: 16, color: color),
         const SizedBox(width: 8),
         Expanded(
-          child: Text(
-            text,
-            style: TextStyle(
-              fontSize: 13,
-              color: Colors.blueGrey[700],
-            ),
-          ),
+          child: Text(text, style: TextStyle(fontSize: 13, color: Colors.blueGrey[700])),
         ),
       ],
     );

@@ -104,7 +104,6 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
 
     // Öğrenci ID'sini bul
     if (isGroupLesson) {
-      // Grup dersi için studentNames ve studentIds listelerinden eşleşmeyi bul
       final List<String> studentNames = List<String>.from(lessonData['studentNames'] ?? []);
       final List<String> studentIds = List<String>.from(lessonData['studentIds'] ?? []);
 
@@ -112,7 +111,6 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
       if (index != -1 && index < studentIds.length) {
         studentId = studentIds[index];
       } else {
-        // Eşleşme bulunamazsa, öğrenciyi allStudents listesinden bul
         final student = allStudents.firstWhere(
               (s) => s['name'] == studentName,
           orElse: () => {'parentId': 'unknown'},
@@ -120,7 +118,6 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
         studentId = student['parentId'];
       }
     } else {
-      // Bireysel ders
       studentId = lessonData['studentId'] ??
           allStudents.firstWhere(
                 (s) => s['name'] == studentName,
@@ -128,16 +125,16 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
           )['parentId'];
     }
 
-    // Devamsızlık bilgisini al
-    final attendanceDoc = await FirebaseFirestore.instance
+    // Devamsızlık bilgisini almak için attendances alt koleksiyonunda parametre arıyoruz
+    final attendanceQuery = await FirebaseFirestore.instance
         .collection('lessons')
         .doc(lesson.id)
         .collection('attendances')
-        .doc(studentId)
+        .where('studentId', isEqualTo: studentId)
         .get();
 
-    if (attendanceDoc.exists) {
-      final data = attendanceDoc.data()!;
+    for (var attendanceDoc in attendanceQuery.docs) {
+      final data = attendanceDoc.data();
       absences.add({
         'date': (data['timestamp'] as Timestamp).toDate(),
         'status': data['status'] ?? 'bilinmiyor',
@@ -225,6 +222,12 @@ class _SupervisorStudentListScreenState extends State<SupervisorStudentListScree
             child: FutureBuilder<void>(
               future: allStudents.isNotEmpty ? Future.value() : loadAllStudents(),
               builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: CircularProgressIndicator(),
+                  );
+                }
+
                 if (allStudents.isEmpty) {
                   return const Center(child: Text('Kayıtlı öğrenci bulunamadı.'));
                 }
