@@ -50,6 +50,9 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
 
     final lessons = await getFilteredLessons();
 
+    // 🔹 Paralel çağrılar
+    final futures = <Future>[];
+
     for (var lesson in lessons) {
       final lessonId = lesson['virtualId'];
       final isGroupLesson = lesson.containsKey('isGroupLesson')
@@ -60,13 +63,20 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
           ? List<String>.from(lesson['studentIds'] ?? [])
           : [lesson['studentId'] as String];
 
-      await loadExistingAttendance(lesson['lessonId'], lessonId, studentIds);
+      // Her çağrıyı beklemiyoruz, listeye ekliyoruz
+      futures.add(loadExistingAttendance(
+          lesson['lessonId'], lessonId, studentIds));
     }
 
-    setState(() {
-      allLessons = lessons;
-      isLoading = false;
-    });
+    // 🔹 Hepsini aynı anda bekliyoruz
+    await Future.wait(futures);
+
+    if (mounted) {
+      setState(() {
+        allLessons = lessons;
+        isLoading = false;
+      });
+    }
   }
 
   Future<void> getUserRole() async {
@@ -132,16 +142,9 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
 
     final snapshot = await query.get();
 
-    final filteredLessons = snapshot.docs.where((doc) {
-      final date = (doc['date'] as Timestamp).toDate();
-      return date.isBefore(now) &&
-          date.month == selectedMonth &&
-          date.year == selectedYear;
-    }).toList();
-
     final expandedLessons = <Map<String, dynamic>>[];
 
-    for (var lesson in filteredLessons) {
+    for (var lesson in snapshot.docs) {
       final data = lesson.data() as Map<String, dynamic>;
       final baseDate = (data['date'] as Timestamp).toDate();
 
@@ -161,23 +164,32 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
 
       if (data['recurring'] == true) {
         var currentDate = baseDate;
+
+        // 🔹 Haftalık dersleri tek tek genişletiyoruz
         while (currentDate.isBefore(now)) {
-          expandedLessons.add({
-            ...data,
-            'virtualId':
-            '${lesson.id}_${DateFormat('yyyyMMdd').format(currentDate)}',
-            'lessonId': lesson.id,
-            'date': Timestamp.fromDate(currentDate),
-          });
+          // 🔹 Artık ay filtresi "currentDate" üzerinden
+          if (currentDate.month == selectedMonth &&
+              currentDate.year == selectedYear) {
+            expandedLessons.add({
+              ...data,
+              'virtualId':
+              '${lesson.id}_${DateFormat('yyyyMMdd').format(currentDate)}',
+              'lessonId': lesson.id,
+              'date': Timestamp.fromDate(currentDate),
+            });
+          }
           currentDate = currentDate.add(const Duration(days: 7));
         }
       } else {
-        expandedLessons.add({
-          ...data,
-          'virtualId': lesson.id,
-          'lessonId': lesson.id,
-          'date': data['date'],
-        });
+        final date = (data['date'] as Timestamp).toDate();
+        if (date.month == selectedMonth && date.year == selectedYear) {
+          expandedLessons.add({
+            ...data,
+            'virtualId': lesson.id,
+            'lessonId': lesson.id,
+            'date': data['date'],
+          });
+        }
       }
     }
 
@@ -193,22 +205,37 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
   Future<void> loadExistingAttendance(
       String lessonId, String virtualId, List<String> studentIds) async {
     try {
-      final datePart = virtualId.split('_').last; // yyyyMMdd kısmı
+      // Tüm attendances'ı getir ve manuel filtrele
       final attendanceSnapshot = await FirebaseFirestore.instance
           .collection('lessons')
           .doc(lessonId)
           .collection('attendances')
-          .where(FieldPath.documentId, whereIn: studentIds.map((id) => '${id}_$datePart').toList())
           .get();
 
       final existingAttendance = <String, String>{};
 
       for (var attDoc in attendanceSnapshot.docs) {
-        final studentId = studentIds.firstWhere((id) => attDoc.id.startsWith(id));
-        existingAttendance[studentId] = attDoc.data()['status'] ?? 'unknown';
+        final data = attDoc.data();
+        final studentId = data['studentId'] as String?;
+        final status = data['status'] as String?;
+        final occurrenceDate = data['occurrenceDate'] as Timestamp?;
+
+        if (studentId != null &&
+            status != null &&
+            occurrenceDate != null &&
+            studentIds.contains(studentId)) {
+
+          // virtualId'deki tarih ile occurrenceDate'i karşılaştır
+          final virtualDateStr = virtualId.split('_').last;
+          final occurrenceDateStr = DateFormat('yyyyMMdd').format(occurrenceDate.toDate());
+
+          if (virtualDateStr == occurrenceDateStr) {
+            existingAttendance[studentId] = status;
+          }
+        }
       }
 
-      if (existingAttendance.isNotEmpty && mounted) {
+      if (mounted) {
         setState(() {
           attendanceStatus[virtualId] = existingAttendance;
         });
@@ -294,7 +321,7 @@ class _DevamsizliklarScreenState extends State<DevamsizliklarScreen> {
     final kayitliLessons = allLessons.where((lesson) {
       final virtualId = lesson['virtualId'];
       return attendanceStatus.containsKey(virtualId) &&
-          attendanceStatus[virtualId]!.isNotEmpty;
+          attendanceStatus[virtualId]!.isNotEmpty; // <-- Burası sorunlu olabilir
     }).toList();
 
     if (kayitliLessons.isEmpty) {
